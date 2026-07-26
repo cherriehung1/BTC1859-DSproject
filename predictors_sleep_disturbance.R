@@ -104,26 +104,91 @@ for (out in c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")) {
 # (RenalFailure handled separately above via Fisher's exact test)
 
 outcomes <- c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")
-predictors <- c("Age","Gender_f","BMI","TimeSinceTransplant",
-                "LiverDiagnosis_f","Recurrence_f","Rejection_f",
-                "AnyFibrosis_f","Depression_f","Corticosteroid_f")
+predictors <- c("Age","Gender_f","BMI","TimeSinceTransplant","LiverDiagnosis_f",
+                "Recurrence_f","Rejection_f","AnyFibrosis_f","Depression_f","Corticosteroid_f")
 
-univariable_results <- list()
+# Collect every predictor row (across all models) into one tidy data frame,
+# used both for the printed table and the heatmap below
+univariable_results <- data.frame()
 for (out in outcomes) {
   for (pred in predictors) {
     f <- as.formula(paste(out, "~", pred))
     m <- glm(f, data=df, family=binomial)
+    co <- summary(m)$coefficients
+    ci <- confint(m)
+    rows <- data.frame(
+      outcome = out,
+      term    = rownames(co)[-1],
+      OR      = exp(co[-1, 1]),
+      CI_low  = exp(ci[-1, 1]),
+      CI_high = exp(ci[-1, 2]),
+      p_value = co[-1, 4],
+      row.names = NULL
+    )
     cat("\n===", out, "~", pred, "===\n")
-    print(round(cbind(OR=exp(coef(m)), exp(confint(m)), 
-                      p=summary(m)$coefficients[,4]), 3)
+    print(round(cbind(OR=rows$OR, CI_low=rows$CI_low, CI_high=rows$CI_high, p=rows$p_value), 3))
+    univariable_results <- rbind(univariable_results, rows)
   }
 }
+
+write.csv(univariable_results, "univariable_OR_CI_p_table.csv", row.names = FALSE)
 
 # See project notes / report Table 1 for the compiled OR/CI/p summary table
 # across all predictors and all four outcomes.
 
 # ---------------------------------------------------------------
-# 4. ADJUSTED (MULTIVARIABLE) MODELS
+# 3b. HEATMAP OF UNIVARIABLE ORs (ggplot2)
+# ---------------------------------------------------------------
+# Compact alternative view of the same univariable_results table: predictors
+# as rows, outcomes as columns, cell color = OR (log scale, diverging around
+# OR=1), cell label = OR value with significance stars.
+
+heat_data <- univariable_results
+heat_data$sig_label <- with(heat_data,
+                            paste0(round(OR, 2),
+                                   ifelse(p_value < 0.01, "**",
+                                          ifelse(p_value < 0.05, "*",
+                                                 ifelse(p_value < 0.10, "^", "")))))
+
+# Add RenalFailure back in for visual completeness. It was excluded from the
+# univariable loop above because 3 of 4 outcomes hit complete separation
+# (see Section 2); only AIS produced an estimable OR. The "not estimable"
+# cells are shown as blank/grey tiles with an "n/e" label instead of a number.
+renal_rows <- data.frame(
+  outcome = c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
+  term    = "RenalFailure_f[Yes vs No]",
+  OR      = c(NA, NA, 2.45, NA),
+  CI_low  = NA, CI_high = NA,
+  p_value = c(NA, NA, 0.440, NA),
+  sig_label = c("n/e", "n/e", "2.45", "n/e")
+)
+heat_data <- rbind(heat_data, renal_rows)
+
+heat_data$outcome <- factor(heat_data$outcome,
+                            levels = c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
+                            labels = c("ESS","PSQI","AIS","Berlin"))
+# keep predictors in a sensible reading order (reverse for top-to-bottom display)
+heat_data$term <- factor(heat_data$term, levels = rev(unique(heat_data$term)))
+
+ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = sig_label), size = 3) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0,
+                       na.value = "#D9D9D9",
+                       name = "Odds Ratio", labels = function(x) round(exp(x), 2)) +
+  scale_x_discrete(position = "top") +
+  labs(x = NULL, y = NULL,
+       title = "Univariable predictors of sleep disturbance, by instrument",
+       caption = "** p<0.01, * p<0.05, ^ p<0.10. Renal failure omitted (not estimable - see Section 2).") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"))
+
+ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
+
+# ---------------------------------------------------------------
+# 4. MULTIVARIABLE MODELS
 # ---------------------------------------------------------------
 # Predictor sets were chosen by: (a) univariable screening at p<0.20, then
 # (b) trimming to respect the rule-of-thumb sample size restriction
