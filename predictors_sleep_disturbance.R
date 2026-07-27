@@ -324,3 +324,403 @@ forest_plot <- ggplot(forest_data, aes(x = OR, y = term, color = sig)) +
 forest_plot
 #ggsave("forest_plot_sleep_disturbance.png", 
      #  plot = forest_plot, width = 11, height = 8, dpi = 300)
+
+df <- read.csv("project_data_cleaned.csv", na.strings = c("NA", ""))
+
+## ---- 1. Recode / label variables we need -----------------------------------
+
+
+                       
+df <- df %>%
+  mutate(
+    # sleep instruments (continuous)
+    ESS  = ESS,
+    PSQI = PSQI,
+    AIS  = AIS,
+    BSS  = Berlin,          # already binary (0/1)
+    
+    # QoL outcomes
+    PCS = PCS,
+    MCS = MCS,
+    
+    # binary sleep-disturbance flags using the clinically accepted cut-offs
+    # given in the assignment (NOT the pre-existing "Poor.sleep.quality" /
+    # "Insomnia" columns, so that the thresholds are explicit and reproducible)
+    ESS_dist  = factor(ifelse(ESS  > 10, "Disturbed", "No disturbance"),
+                       levels = c("No disturbance", "Disturbed")),
+    PSQI_dist = factor(ifelse(PSQI > 4,  "Disturbed", "No disturbance"),
+                       levels = c("No disturbance", "Disturbed")),
+    AIS_dist  = factor(ifelse(AIS  > 5,  "Disturbed", "No disturbance"),
+                       levels = c("No disturbance", "Disturbed")),
+    BSS_dist  = factor(ifelse(BSS  == 1, "Disturbed", "No disturbance"),
+                       levels = c("No disturbance", "Disturbed")),
+    
+    # covariates for the adjusted models, as factors where appropriate
+    Gender                      = factor(Gender, levels = c(1, 2),
+                                         labels = c("Male", "Female")),
+    Liver.Diagnosis             = factor(LiverDiagnosis),
+    Recurrence.of.disease       = factor(Recurrence, levels = c(0, 1),
+                                         labels = c("No", "Yes")),
+    Rejection.graft.dysfunction = factor(Rejection, levels = c(0, 1),
+                                         labels = c("No", "Yes")),
+    Any.fibrosis                = factor(AnyFibrosis, levels = c(0, 1),
+                                         labels = c("No", "Yes")),
+    Renal.Failure                = factor(RenalFailure, levels = c(0, 1),
+                                          labels = c("No", "Yes")),
+    Depression                   = factor(Depression, levels = c(0, 1),
+                                          labels = c("No", "Yes")),
+    Corticoid                    = factor(Corticosteroid, levels = c(0, 1),
+                                          labels = c("No", "Yes")),
+    Age                          = Age,
+    BMI                          = BMI,
+    Time.from.transplant         = TimeSinceTransplant
+  )
+
+## =============================================================================
+## 9. SIMPLE RELATIONSHIPS: scatterplots + correlation (ESS, PSQI, AIS)
+## =============================================================================
+## Berlin is binary, so a scatterplot/correlation does not apply to it here;
+## it is handled instead in the group-comparison step (section 10).
+
+## ---- 9a. Scatterplots -------------------------------------------------------
+
+plot_scatter <- function(data, xvar, xlab) {
+  p_pcs <- ggplot(data, aes(x = .data[[xvar]], y = PCS)) +
+    geom_point(alpha = 0.6, na.rm = TRUE) +
+    geom_smooth(method = "lm", se = TRUE, colour = "black", na.rm = TRUE) +
+    labs(x = xlab, y = "SF-36 Physical Component Score (PCS)",
+         title = paste(xlab, "vs. Physical QoL")) +
+    theme_bw()
+  
+  p_mcs <- ggplot(data, aes(x = .data[[xvar]], y = MCS)) +
+    geom_point(alpha = 0.6, na.rm = TRUE) +
+    geom_smooth(method = "lm", se = TRUE, colour = "black", na.rm = TRUE) +
+    labs(x = xlab, y = "SF-36 Mental Component Score (MCS)",
+         title = paste(xlab, "vs. Mental QoL")) +
+    theme_bw()
+  
+  list(pcs = p_pcs, mcs = p_mcs)
+}
+
+ess_plots  <- plot_scatter(df, "ESS",  "Epworth Sleepiness Scale (ESS)")
+psqi_plots <- plot_scatter(df, "PSQI", "Pittsburgh Sleep Quality Index (PSQI)")
+ais_plots  <- plot_scatter(df, "AIS",  "Athens Insomnia Scale (AIS)")
+
+# Save all six scatterplots to file (2 outcomes x 3 instruments)
+ggsave("scatter_ESS_PCS.png",  ess_plots$pcs,  width = 5, height = 4)
+ggsave("scatter_ESS_MCS.png",  ess_plots$mcs,  width = 5, height = 4)
+ggsave("scatter_PSQI_PCS.png", psqi_plots$pcs, width = 5, height = 4)
+ggsave("scatter_PSQI_MCS.png", psqi_plots$mcs, width = 5, height = 4)
+ggsave("scatter_AIS_PCS.png",  ais_plots$pcs,  width = 5, height = 4)
+ggsave("scatter_AIS_MCS.png",  ais_plots$mcs,  width = 5, height = 4)
+
+# Optional: combined 3x2 grid if gridExtra/patchwork is available
+if (requireNamespace("patchwork", quietly = TRUE)) {
+  library(patchwork)
+  combined <- (ess_plots$pcs | ess_plots$mcs) /
+    (psqi_plots$pcs | psqi_plots$mcs) /
+    (ais_plots$pcs | ais_plots$mcs)
+  ggsave("scatter_all_sleep_vs_qol.png", combined, width = 10, height = 12)
+}
+
+## ---- 9b. Correlations --------------------------------------------------------
+## Decision rule: use Pearson by default; switch to Spearman if a scatterplot
+## shows a clearly non-linear (but still monotonic) pattern, or if a variable
+## is markedly skewed / has influential outliers (PSQI and AIS scores from
+## symptom-questionnaires are typically right-skewed with a floor effect at 0,
+## which is a common reason to prefer Spearman for these instruments).
+
+check_skew <- function(x) {
+  x <- x[!is.na(x)]
+  c(n = length(x),
+    mean = mean(x), sd = sd(x),
+    median = median(x),
+    skewness = mean((x - mean(x))^3) / sd(x)^3)
+}
+
+skew_tbl <- rbind(
+  ESS  = check_skew(df$ESS),
+  PSQI = check_skew(df$PSQI),
+  AIS  = check_skew(df$AIS)
+)
+print(round(skew_tbl, 2))
+
+cor_test_both <- function(x, y, xname, yname) {
+  ok <- complete.cases(x, y)
+  pear <- cor.test(x[ok], y[ok], method = "pearson")
+  spear <- cor.test(x[ok], y[ok], method = "spearman", exact = FALSE)
+  data.frame(
+    sleep_measure = xname, qol_measure = yname, n = sum(ok),
+    pearson_r  = round(unname(pear$estimate), 3),
+    pearson_p  = signif(pear$p.value, 3),
+    spearman_rho = round(unname(spear$estimate), 3),
+    spearman_p   = signif(spear$p.value, 3)
+  )
+}
+
+cor_results <- bind_rows(
+  cor_test_both(df$ESS,  df$PCS, "ESS",  "PCS"),
+  cor_test_both(df$ESS,  df$MCS, "ESS",  "MCS"),
+  cor_test_both(df$PSQI, df$PCS, "PSQI", "PCS"),
+  cor_test_both(df$PSQI, df$MCS, "PSQI", "MCS"),
+  cor_test_both(df$AIS,  df$PCS, "AIS",  "PCS"),
+  cor_test_both(df$AIS,  df$MCS, "AIS",  "MCS")
+)
+
+print(cor_results)
+# In the report: report Pearson's r when skewness is modest and the
+# scatterplot/loess trend looks linear; report Spearman's rho (and explain why)
+# for any instrument-outcome pair where skewness is high (e.g., |skew| > 1)
+# or the scatterplot suggests a monotonic-but-curved relationship.
+
+write.csv(cor_results, "correlation_results_sleep_vs_qol.csv", row.names = FALSE)
+
+## =============================================================================
+## 10. QoL COMPARISON BETWEEN DISTURBED vs. NON-DISTURBED GROUPS
+## =============================================================================
+## For each instrument (ESS, PSQI, AIS, Berlin): compare mean PCS and mean MCS
+## between the "disturbed" and "not disturbed" groups.
+## Primary test: Welch two-sample t-test (does NOT assume equal variances -
+## more defensible by default than Student's t-test).
+## Secondary/robustness check: Wilcoxon rank-sum test, reported if normality
+## or equal-variance assumptions look seriously violated (e.g. via
+## Shapiro-Wilk test and visual inspection of boxplots/QQ-plots).
+
+compare_groups <- function(data, group_var, outcome_var, sleep_label) {
+  d <- data %>% select(grp = all_of(group_var), y = all_of(outcome_var)) %>%
+    filter(!is.na(grp), !is.na(y))
+  
+  # Welch t-test (unequal variances assumed by default)
+  tt <- t.test(y ~ grp, data = d)  # Welch by default in R (var.equal = FALSE)
+  
+  # Wilcoxon rank-sum test as a non-parametric alternative
+  wt <- wilcox.test(y ~ grp, data = d)
+  
+  # Shapiro-Wilk normality check within each group (flag violations)
+  shapiro_p <- d %>% group_by(grp) %>%
+    summarise(p = tryCatch(shapiro.test(y)$p.value, error = function(e) NA_real_)) %>%
+    pull(p)
+  
+  means <- d %>% group_by(grp) %>%
+    summarise(mean = mean(y), sd = sd(y), n = n(), .groups = "drop")
+  
+  data.frame(
+    sleep_measure = sleep_label,
+    outcome = outcome_var,
+    n_no_disturbance = means$n[means$grp == "No disturbance"],
+    mean_no_disturbance = round(means$mean[means$grp == "No disturbance"], 1),
+    sd_no_disturbance   = round(means$sd[means$grp == "No disturbance"], 1),
+    n_disturbance = means$n[means$grp == "Disturbed"],
+    mean_disturbance = round(means$mean[means$grp == "Disturbed"], 1),
+    sd_disturbance   = round(means$sd[means$grp == "Disturbed"], 1),
+    welch_t_p  = signif(tt$p.value, 3),
+    wilcoxon_p = signif(wt$p.value, 3),
+    shapiro_p_min = signif(min(shapiro_p, na.rm = TRUE), 3)
+  )
+}
+
+instruments <- list(
+  ESS  = "ESS_dist",
+  PSQI = "PSQI_dist",
+  AIS  = "AIS_dist",
+  Berlin = "BSS_dist"
+)
+
+pcs_table <- bind_rows(lapply(names(instruments), function(nm)
+  compare_groups(df, instruments[[nm]], "PCS", nm)))
+
+mcs_table <- bind_rows(lapply(names(instruments), function(nm)
+  compare_groups(df, instruments[[nm]], "MCS", nm)))
+
+cat("\n--- Physical QoL (PCS) by disturbance group ---\n")
+print(pcs_table)
+cat("\n--- Mental QoL (MCS) by disturbance group ---\n")
+print(mcs_table)
+
+write.csv(pcs_table, "group_comparison_PCS.csv", row.names = FALSE)
+write.csv(mcs_table, "group_comparison_MCS.csv", row.names = FALSE)
+
+## Boxplots to accompany the tables
+make_boxplot <- function(data, group_var, outcome_var, ylab, title) {
+  d <- data %>% filter(!is.na(.data[[group_var]]), !is.na(.data[[outcome_var]]))
+  ggplot(d, aes(x = .data[[group_var]], y = .data[[outcome_var]])) +
+    geom_boxplot(fill = "grey85", outlier.shape = NA) +
+    geom_jitter(width = 0.15, alpha = 0.4) +
+    labs(x = NULL, y = ylab, title = title) +
+    theme_bw()
+}
+
+for (nm in names(instruments)) {
+  gv <- instruments[[nm]]
+  ggsave(paste0("box_", nm, "_PCS.png"),
+         make_boxplot(df, gv, "PCS", "SF-36 PCS", paste(nm, "- Physical QoL")),
+         width = 4.5, height = 4)
+  ggsave(paste0("box_", nm, "_MCS.png"),
+         make_boxplot(df, gv, "MCS", "SF-36 MCS", paste(nm, "- Mental QoL")),
+         width = 4.5, height = 4)
+}
+
+## =============================================================================
+## 11. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
+## =============================================================================
+## Rationale for NOT combining ESS + PSQI + AIS + BSS in a single model:
+##  - They are correlated measures of overlapping/related constructs
+##    (multicollinearity would inflate SEs and make coefficients unstable
+##    and hard to interpret - check with VIF below on a combined model to
+##    illustrate this).
+##  - PSQI has ~32% missingness in this dataset; forcing it into every
+##    model would needlessly drop ~1/3 of subjects from all analyses.
+##  - Interpretation is much cleaner one instrument at a time: "a one-point
+##    increase in PSQI is associated with an X-point change in PCS/MCS,
+##    holding covariates constant."
+##
+## Adjustment set (per the assignment's demographic/clinical variable list):
+##   Age, Gender, BMI, Time.from.transplant, Liver.Diagnosis,
+##   Recurrence.of.disease, Rejection.graft.dysfunction, Any.fibrosis,
+##   Renal.Failure, Depression, Corticoid
+
+covariates <- c("Age", "Gender", "BMI", "Time.from.transplant",
+                "Liver.Diagnosis", "Recurrence.of.disease",
+                "Rejection.graft.dysfunction", "Any.fibrosis",
+                "Renal.Failure", "Depression", "Corticoid")
+
+fit_adjusted <- function(data, sleep_var, outcome_var, covars) {
+  form <- as.formula(
+    paste(outcome_var, "~", sleep_var, "+", paste(covars, collapse = " + "))
+  )
+  model_data <- data %>% select(all_of(outcome_var), all_of(sleep_var), all_of(covars)) %>%
+    na.omit()
+  fit <- lm(form, data = model_data)
+  list(fit = fit, n = nrow(model_data), formula = form)
+}
+
+sleep_vars <- c("ESS", "PSQI", "AIS", "BSS")
+outcomes   <- c("PCS", "MCS")
+
+adjusted_models <- list()
+for (s in sleep_vars) {
+  for (o in outcomes) {
+    key <- paste(s, o, sep = "_")
+    adjusted_models[[key]] <- fit_adjusted(df, s, o, covariates)
+  }
+}
+
+## ---- 11a. Print tidy summaries for each model -------------------------------
+
+for (key in names(adjusted_models)) {
+  m <- adjusted_models[[key]]
+  cat("\n=====================================================\n")
+  cat("Model:", key, " (n =", m$n, ")\n")
+  cat("Formula:", deparse(m$formula), "\n")
+  print(kable(tidy(m$fit, conf.int = TRUE) %>%
+                mutate(across(where(is.numeric), ~round(., 3)))))
+  cat("Adjusted R-squared:", round(summary(m$fit)$adj.r.squared, 3), "\n")
+}
+
+## ---- 11b. Diagnostics for each fitted model ---------------------------------
+## Check: linearity/homoscedasticity (residuals vs fitted), normality of
+## residuals (QQ-plot), and multicollinearity (VIF) for every model.
+
+for (key in names(adjusted_models)) {
+  m <- adjusted_models[[key]]$fit
+  png(paste0("diagnostics_", key, ".png"), width = 800, height = 800)
+  par(mfrow = c(2, 2))
+  plot(m)
+  dev.off()
+  
+  cat("\nVIFs for", key, ":\n")
+  print(round(vif(m), 2))
+}
+
+## ---- 11c. Illustration: why NOT to combine all 4 instruments ---------------
+## Fit one combined ("kitchen sink") model on PCS with complete cases across
+## all four instruments simultaneously, purely to demonstrate collinearity /
+## sample-size loss - NOT recommended as a primary model.
+
+combined_data <- df %>%
+  select(PCS, ESS, PSQI, AIS, BSS, all_of(covariates)) %>%
+  na.omit()
+
+cat("\nSample size available for the 'kitchen sink' combined model: n =",
+    nrow(combined_data), "vs. n =", adjusted_models[["PSQI_PCS"]]$n,
+    "for the PSQI-only adjusted model.\n")
+
+combined_fit <- lm(PCS ~ ESS + PSQI + AIS + BSS +
+                     Age + Gender + BMI + Time.from.transplant +
+                     Liver.Diagnosis + Recurrence.of.disease +
+                     Rejection.graft.dysfunction + Any.fibrosis +
+                     Renal.Failure + Depression + Corticoid,
+                   data = combined_data)
+
+cat("\nVIFs in the combined ('kitchen sink') model (illustrative only):\n")
+print(round(vif(combined_fit), 2))
+
+## ---- 11d. Extract a clean summary table of the sleep-instrument coefficient
+##      (i.e., the adjusted effect of each sleep measure on each outcome) -----
+
+extract_sleep_coef <- function(key) {
+  m <- adjusted_models[[key]]$fit
+  s <- adjusted_models[[key]]
+  sleep_var <- str_split(key, "_")[[1]][1]
+  outcome   <- str_split(key, "_")[[1]][2]
+  td <- tidy(m, conf.int = TRUE) %>% filter(term == sleep_var)
+  data.frame(
+    sleep_measure = sleep_var,
+    outcome = outcome,
+    n = s$n,
+    beta = round(td$estimate, 3),
+    ci_low = round(td$conf.low, 3),
+    ci_high = round(td$conf.high, 3),
+    p_value = signif(td$p.value, 3)
+  )
+}
+
+sleep_effect_summary <- bind_rows(lapply(names(adjusted_models), extract_sleep_coef))
+cat("\n--- Adjusted effect of each sleep instrument on QoL outcomes ---\n")
+print(sleep_effect_summary)
+write.csv(sleep_effect_summary, "adjusted_sleep_effects_summary.csv", row.names = FALSE)
+
+## =============================================================================
+## 11e. Full covariate tables for all 8 adjusted models (appendix table)
+## =============================================================================
+
+extract_full_model <- function(key) {
+  m <- adjusted_models[[key]]$fit
+  n <- adjusted_models[[key]]$n
+  parts <- str_split(key, "_")[[1]]
+  sleep_var <- parts[1]
+  outcome   <- parts[2]
+  
+  tidy(m, conf.int = TRUE) %>%
+    mutate(
+      sleep_measure = sleep_var,
+      outcome = outcome,
+      n = n,
+      estimate  = round(estimate, 3),
+      conf.low  = round(conf.low, 3),
+      conf.high = round(conf.high, 3),
+      p.value   = signif(p.value, 3)
+    ) %>%
+    select(sleep_measure, outcome, n, term, estimate,
+           conf.low, conf.high, p.value)
+}
+
+full_model_results <- bind_rows(lapply(names(adjusted_models), extract_full_model))
+
+# Optional: flag which terms are significant at the 0.05 level, for quick scanning
+full_model_results <- full_model_results %>%
+  mutate(significant = ifelse(p.value < 0.05, "*", ""))
+
+print(full_model_results)
+
+write.csv(full_model_results, "full_model_coefficients.csv", row.names = FALSE)
+
+## =============================================================================
+## End of Analysis 4 script.
+## Suggested report text for each significant sleep-instrument coefficient:
+##   "A one-point increase in <instrument> was associated with an estimated
+##    <beta>-point <increase/decrease> in <PCS/MCS> (95% CI: <low>, <high>,
+##    p = <p>), after adjustment for age, gender, BMI, time since transplant,
+##    liver diagnosis, recurrence of disease, rejection/graft dysfunction,
+##    fibrosis, renal failure, depression, and corticosteroid use."
+## =============================================================================
