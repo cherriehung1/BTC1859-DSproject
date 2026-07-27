@@ -134,9 +134,6 @@ for (out in outcomes) {
 
 write.csv(univariable_results, "univariable_OR_CI_p_table.csv", row.names = FALSE)
 
-# See project notes / report Table 1 for the compiled OR/CI/p summary table
-# across all predictors and all four outcomes.
-
 # ---------------------------------------------------------------
 # 3b. HEATMAP OF UNIVARIABLE ORs (ggplot2)
 # ---------------------------------------------------------------
