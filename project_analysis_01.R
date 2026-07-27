@@ -146,7 +146,7 @@ for (out in sleep_outcomes) {
   }
 }
 
-write.csv(univariable_results, "univariable_OR_CI_p_table.csv", row.names = FALSE)
+# write.csv(univariable_results, "univariable_OR_CI_p_table.csv", row.names = FALSE)
 
 # See project notes / report Table 1 for the compiled OR/CI/p summary table
 # across all predictors and all four outcomes.
@@ -167,32 +167,25 @@ heat_data$sig_label <- with(heat_data,
 
 # Add RenalFailure back in for visual completeness. It was excluded from the
 # univariable loop above because 3 of 4 outcomes hit complete separation
-# (see Section 2). Rather than hardcoding the OR/p/n values by hand (which
-# would silently go stale if the data changes - exactly what happened when
-# ESS's n shifted from 251 to 250 after a data refresh), fit each of the
+# (see Section 2). Rather than hardcoding the OR/p/n values by hand , fit each of the
 # four RenalFailure univariable models here and read the numbers off the
 # fitted objects directly. Separation is detected via the actual glm()
 # warning rather than an eyeballed OR threshold.
 fit_renal_univariable <- function(outcome) {
-  sep_warning <- FALSE
-  m <- withCallingHandlers(
-    glm(as.formula(paste(outcome, "~ RenalFailure_f")), data = df_sleep, family = binomial),
-    warning = function(w) {
-      if (grepl("fitted probabilities numerically 0 or 1 occurred", conditionMessage(w))) {
-        sep_warning <<- TRUE
-      }
-      invokeRestart("muffleWarning")
-    }
-  )
-  n    <- nobs(m)
-  co   <- summary(m)$coefficients
-  term_name <- grep("RenalFailure", rownames(co), value = TRUE)
+  tab <- table(df_sleep$RenalFailure_f, df_sleep[[outcome]])
+  separated <- any(tab == 0)   # any empty cell -> (quasi-)complete separation
   
-  if (sep_warning || length(term_name) == 0) {
+  n <- sum(!is.na(df_sleep$RenalFailure_f) & !is.na(df_sleep[[outcome]]))
+  
+  if (separated) {
     return(data.frame(outcome = outcome, term = "RenalFailure_f[Yes vs No]",
                       OR = NA, CI_low = NA, CI_high = NA, p_value = NA,
                       sig_label = "n/e", n = n))
   }
+  
+  m  <- glm(as.formula(paste(outcome, "~ RenalFailure_f")), data = df_sleep, family = binomial)
+  co <- summary(m)$coefficients
+  term_name <- grep("RenalFailure", rownames(co), value = TRUE)
   
   beta <- co[term_name, "Estimate"]
   p    <- co[term_name, "Pr(>|z|)"]
@@ -212,14 +205,34 @@ heat_data$outcome <- factor(heat_data$outcome,
                             levels = c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
                             labels = c("ESS","PSQI","AIS","Berlin"))
 # keep predictors in a sensible reading order (reverse for top-to-bottom display)
-heat_data$term <- factor(heat_data$term, levels = rev(unique(heat_data$term)))
+term_labels <- c(
+  "Age"                       = "Age",
+  "Gender_fFemale"            = "Gender (Female)",
+  "BMI"                       = "BMI",
+  "TimeSinceTransplant"       = "Time Since Transplant",
+  "LiverDiagnosis_fHepC"      = "Liver Dx: Hep C",
+  "LiverDiagnosis_fHepB"      = "Liver Dx: Hep B",
+  "LiverDiagnosis_fAlcohol"   = "Liver Dx: Alcohol",
+  "LiverDiagnosis_fOther"     = "Liver Dx: Other",
+  "Recurrence_fYes"           = "Recurrence",
+  "Rejection_fYes"            = "Rejection",
+  "AnyFibrosis_fYes"          = "Any Fibrosis",
+  "Depression_fYes"           = "Depression",
+  "Corticosteroid_fYes"       = "Corticosteroid Use",
+  "RenalFailure_f[Yes vs No]" = "Renal Failure"
+)
+heat_data$term <- term_labels[heat_data$term]
+
+heat_data$term <- factor(heat_data$term, levels = rev(term_labels))
 
 ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
   geom_tile(color = "white", linewidth = 0.8) +
   geom_text(aes(label = sig_label), size = 3) +
   scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0,
                        na.value = "#D9D9D9",
-                       name = "Odds Ratio", labels = function(x) round(exp(x), 2)) +
+                       breaks = log(c(0.5, 1, 2, 4)),
+                       labels = c("0.5", "1", "2", "4"),
+                       name = "Odds Ratio") +
   scale_x_discrete(position = "top") +
   labs(x = NULL, y = NULL,
        title = "Univariable predictors of sleep disturbance, by instrument",
@@ -231,7 +244,7 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
         axis.text.x = element_text(face = "bold"),
         plot.title = element_text(face = "bold"))
 
-ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
+# ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
 
 # ---------------------------------------------------------------
 # 3c. NOTE ON MULTIPLE TESTING AND VARIABLE SELECTION
@@ -312,7 +325,7 @@ psqi_full <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depress
 # NOTE: psqi_model above is fit on n=183 (only limited by PSQI_binary's own
 # missingness, since Gender/Recurrence/AnyFibrosis/Depression have no NAs).
 # psqi_full adds BMI, which has 23 missing values, dropping n to 165.
-# anova() requires both models fit on the IDENTICAL set of rows (Tutorial 9),
+# anova() requires both models fit on the IDENTICAL set of rows,
 # so the reduced model must be refit on psqi_full's subset before comparing -
 # comparing psqi_model (n=183) directly against psqi_full (n=165) would error.
 psqi_subset <- df_sleep[complete.cases(df_sleep[, c("PSQI_binary","Gender_f","Recurrence_f",
@@ -334,6 +347,47 @@ vif(ais_model)
 ais_full <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
                   Corticosteroid_f, data=df_sleep, family=binomial)
 anova(ais_model, ais_full, test="Chisq")   # Corticosteroid does not improve fit significantly
+
+# Age (p=0.154) and TimeSinceTransplant (p=0.124) both passed the p<0.20
+# univariable screen for AIS but were never added to ais_full or tested via
+# anova() - unlike BMI (PSQI, Section 4 Model 2) and Corticosteroid (AIS,
+# just above), which both got an explicit "add + anova()" test. Testing
+# here for consistency. ais_model is already at 4 of 7-8 available df
+# (m/15 rule, m=117), so this is a sensitivity check, not a candidate for
+# the final model, unless the improvement in fit is compelling.
+
+# Same anova() requirement as the PSQI/BMI comparison above: refit ais_model
+# on the SAME complete-case subset as each expanded model before comparing,
+# since Age/TimeSinceTransplant may carry their own missingness.
+ais_subset_age <- df_sleep[complete.cases(df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+                                                       "AnyFibrosis_f","Depression_f","Age")]), ]
+ais_model_samesub_age <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
+                             data=ais_subset_age, family=binomial)
+ais_full_age <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f + Age,
+                    data=ais_subset_age, family=binomial)
+anova(ais_model_samesub_age, ais_full_age, test="Chisq")
+
+ais_subset_tst <- df_sleep[complete.cases(
+  df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+                 "AnyFibrosis_f","Depression_f","TimeSinceTransplant")]), ]
+ais_model_samesub_tst <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
+                             data=ais_subset_tst, family=binomial)
+ais_full_tst <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f + TimeSinceTransplant,
+                    data=ais_subset_tst, family=binomial)
+anova(ais_model_samesub_tst, ais_full_tst, test="Chisq")
+
+ais_subset_both <- df_sleep[complete.cases(
+  df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+                "AnyFibrosis_f","Depression_f","Age","TimeSinceTransplant")]), ]
+ais_model_samesub_both <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
+                              data=ais_subset_both, family=binomial)
+ais_full_both <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
+                       Age + TimeSinceTransplant, data=ais_subset_both, family=binomial)
+anova(ais_model_samesub_both, ais_full_both, test="Chisq")
+
+cat("n (Age subset):", nobs(ais_model_samesub_age),
+    " | n (TimeSinceTransplant subset):", nobs(ais_model_samesub_tst),
+    " | n (both subset):", nobs(ais_model_samesub_both), "\n")
 
 ## --- Model 4: Berlin ---
 # m/15 budget: m should be computed on the sample the model actually runs on,
@@ -365,10 +419,9 @@ summary(psqi_lin); shapiro.test(resid(psqi_lin))
 summary(ais_lin);  shapiro.test(resid(ais_lin))
 
 # Shapiro-Wilk alone only tests normality of residuals, and says nothing
-# about linearity, homoscedasticity, or influential/leverage points - the
-# same 4-panel diagnostic already used for the 8 QoL models in Section 11b
-# is added here for consistency: Residuals vs Fitted (linearity/
-# homoscedasticity), Normal Q-Q (normality - the visual counterpart to the
+# about linearity, homoscedasticity, or influential/leverage points 
+# Residuals vs Fitted (linearity/homoscedasticity), 
+# Normal Q-Q (normality - the visual counterpart to the
 # Shapiro-Wilk test above), Scale-Location (homoscedasticity, another view),
 # and Residuals vs Leverage (Cook's distance / influential cases).
 continuous_sleep_models <- list(ess_lin = ess_lin, psqi_lin = psqi_lin, ais_lin = ais_lin)
