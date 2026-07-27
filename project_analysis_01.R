@@ -30,7 +30,7 @@ for (pkg in required_packages) {
 # required here.
 
 # =================================================================
-# ANALYSIS 3: PREDICTORS OF SLEEP DISTURBANCE (logistic regression)
+# ANALYSIS 1: PREDICTORS OF SLEEP DISTURBANCE (logistic regression)
 # All objects in this analysis use df_sleep and are prefixed sleep_/_sleep
 # where a name might otherwise be ambiguous.
 # =================================================================
@@ -461,7 +461,7 @@ ggsave("forest_plot_sleep_disturbance.png",
 
 
 # =================================================================
-# ANALYSIS 4: SF36 QUALITY OF LIFE (linear regression)
+# ANALYSIS 2: SF36 QUALITY OF LIFE (linear regression)
 # All objects in this analysis use df_qol and are prefixed qol_/_qol
 # where a name might otherwise be ambiguous. This is an INDEPENDENT read of
 # the same source CSV (own na.strings handling) - it never touches or
