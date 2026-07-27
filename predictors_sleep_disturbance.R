@@ -60,12 +60,13 @@ df$Corticosteroid_f  <- factor(df$Corticosteroid, levels=c(0,1),
 prevalence <- function(x) {
   n_valid <- sum(!is.na(x))
   n_pos   <- sum(x, na.rm=TRUE)
-  c(n_valid=n_valid, n_positive=n_pos, 
-    prevalence_pct=round(100*n_pos/n_valid,1))
+  ci <- prop.test(n_pos, n_valid)$conf.int   # Wilson score interval (with continuity correction)
+  c(n_valid=n_valid, n_positive=n_pos,
+    prevalence_pct=round(100*n_pos/n_valid,1),
+    CI_low_pct=round(100*ci[1],1), CI_high_pct=round(100*ci[2],1))
 }
 
-sapply(df[,c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")], 
-       prevalence)
+sapply(df[,c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")], prevalence)
 
 # NOTE: PSQI has substantially more missing data (~32%) than the other three
 # instruments (~2-6%). This should be flagged as a limitation - any PSQI-based
@@ -190,63 +191,76 @@ ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
 # ---------------------------------------------------------------
 # 4. MULTIVARIABLE MODELS
 # ---------------------------------------------------------------
+
 # Predictor sets were chosen by: (a) univariable screening at p<0.20, then
 # (b) trimming to respect the rule-of-thumb sample size restriction
-# (p < m/15, where m = size of the smaller outcome class.
+# (p < m/15, where m = size of the smaller outcome class - see Lecture 9).
 # RenalFailure excluded from all four models (see Section 2).
-
+ 
 ## --- Model 1: ESS ---
 # m/15 budget ~4 predictors (m=67, smaller class among n=251)
 # LiverDiagnosis collapsed to Hep C vs Other (1 df instead of 4) to fit budget,
 # since only the Hep C level was significant univariably.
 df$LiverDx_HepC <- factor(ifelse(df$LiverDiagnosis==1,"HepC","Other"))
-
-ess_model <- glm(ESS_binary ~ Gender_f + LiverDx_HepC + 
-                   Recurrence_f + Rejection_f,
-                 data=df, family=binomial)
+ 
+ess_model <- glm(ESS_binary ~ Gender_f + LiverDx_HepC + Recurrence_f + Rejection_f,
+                  data=df, family=binomial)
 summary(ess_model)
 round(cbind(OR=exp(coef(ess_model)), exp(confint(ess_model))), 3)
 vif(ess_model)
-
+ 
 # Compare against the larger "fully screened" model (all p<0.20 predictors,
 # before budget trimming) to justify the simpler model:
 ess_full <- glm(ESS_binary ~ Gender_f + LiverDiagnosis_f + Recurrence_f + Rejection_f +
-                  AnyFibrosis_f + Depression_f + Corticosteroid_f,
-                data=df, family=binomial)
+                   AnyFibrosis_f + Depression_f + Corticosteroid_f,
+                 data=df, family=binomial)
 anova(ess_model, ess_full, test="Chisq")   # non-significant -> simpler model preferred
-
+ 
 ## --- Model 2: PSQI ---
 # m/15 budget ~4 predictors (m=66, smaller class among n=183)
 psqi_model <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f,
-                  data=df, family=binomial)
+                   data=df, family=binomial)
 summary(psqi_model)
 round(cbind(OR=exp(coef(psqi_model)), exp(confint(psqi_model))), 3)
 vif(psqi_model)
-
+ 
 psqi_full <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
-                 data=df, family=binomial)
-anova(psqi_model, psqi_full, test="Chisq")  # BMI does not improve fit significantly
-
+                  data=df, family=binomial)
+ 
+# NOTE: psqi_model above is fit on n=183 (only limited by PSQI_binary's own
+# missingness, since Gender/Recurrence/AnyFibrosis/Depression have no NAs).
+# psqi_full adds BMI, which has 23 missing values, dropping n to 165.
+# anova() requires both models fit on the IDENTICAL set of rows (Tutorial 9),
+# so the reduced model must be refit on psqi_full's subset before comparing -
+# comparing psqi_model (n=183) directly against psqi_full (n=165) would error.
+psqi_subset <- df[complete.cases(df[, c("PSQI_binary","Gender_f","Recurrence_f",
+                                         "AnyFibrosis_f","Depression_f","BMI")]), ]
+psqi_model_samesub <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f,
+                           data=psqi_subset, family=binomial)
+psqi_full_samesub  <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
+                           data=psqi_subset, family=binomial)
+anova(psqi_model_samesub, psqi_full_samesub, test="Chisq")  # BMI does not improve fit significantly, n=165 for both
+ 
 ## --- Model 3: AIS ---
 # m/15 budget ~7-8 predictors (m=117, smaller class among n=262)
 ais_model <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
-                 data=df, family=binomial)
+                  data=df, family=binomial)
 summary(ais_model)
 round(cbind(OR=exp(coef(ais_model)), exp(confint(ais_model))), 3)
 vif(ais_model)
-
+ 
 ais_full <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
-                  Corticosteroid_f, data=df, family=binomial)
+                    Corticosteroid_f, data=df, family=binomial)
 anova(ais_model, ais_full, test="Chisq")   # Corticosteroid does not improve fit significantly
-
+ 
 ## --- Model 4: Berlin ---
-# m/15 budget ~6-7 predictors (m=102, smaller class among n=262); well under budget
+# m/15 budget ~6-7 predictors (m=89, n = 237, smaller class among n=262)
 berlin_model <- glm(Berlin_binary ~ Age + BMI + TimeSinceTransplant,
-                    data=df, family=binomial)
+                     data=df, family=binomial)
 summary(berlin_model)
 round(cbind(OR=exp(coef(berlin_model)), exp(confint(berlin_model))), 3)
 vif(berlin_model)
-
+ 
 # ---------------------------------------------------------------
 # 5. SENSITIVITY ANALYSIS: CONTINUOUS SLEEP SCORES (linear regression)
 # ---------------------------------------------------------------
