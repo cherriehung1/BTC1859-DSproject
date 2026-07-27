@@ -234,6 +234,41 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
 ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
 
 # ---------------------------------------------------------------
+# 3c. NOTE ON MULTIPLE TESTING AND VARIABLE SELECTION
+# ---------------------------------------------------------------
+# Section 3 ran ~10 predictor blocks x 4 outcomes (56 individual coefficients
+# once LiverDiagnosis's 4 dummy levels are counted separately). At a=0.05,
+# pure chance alone would be expected to produce roughly 2-3 "significant"
+# results across that many tests even if no predictor were actually related
+# to sleep disturbance at all. Separately, and more consequentially: Section 4
+# uses these univariable p<0.20 results to decide which predictors even get
+# considered for the adjusted models. That screening-then-refitting sequence
+# is a well-documented source of optimistic bias - a predictor that crossed
+# p<0.20 partly by chance is more likely to be carried into the adjusted
+# model, where its significance may or may not hold up. This is not
+# hypothetical here: Any Fibrosis for ESS moved from p=0.054 to p=0.048
+# between two versions of this dataset (a one-patient difference in ESS
+# missingness), and dropped out of significance entirely once adjusted for
+# other predictors - exactly the kind of selection-driven instability this
+# caveat is about.
+#
+# No formal correction (e.g., Bonferroni) is applied here. Bonferroni assumes
+# independent tests, and the four outcomes are explicitly NOT independent -
+# ESS, PSQI, and AIS are correlated measures of overlapping constructs (see
+# the univariable heatmap), so a predictor associated with one is more likely
+# than chance to also show up for another. A correction built for independent
+# tests would over-correct this correlated-outcome structure and discard real
+# signal along with noise (a strict Bonferroni threshold here, ~0.05/56,
+# would leave only BMI->Berlin and barely Depression->PSQI standing).
+#
+# Practical takeaway for interpretation: findings that replicate across
+# multiple outcomes and multiple analytic approaches (e.g., Depression's
+# association with both PSQI and AIS, in both the binary and continuous-score
+# models) should be treated as more robust than single-outcome, borderline
+# findings (e.g., Any Fibrosis for ESS, p~0.05), which may reflect sampling
+# variability in a moderate sample (n=183-262) rather than a true effect.
+
+# ---------------------------------------------------------------
 # 4. MULTIVARIABLE MODELS
 # ---------------------------------------------------------------
 
@@ -243,7 +278,9 @@ ggsave("univariable_heatmap.png", width = 8, height = 9.5, dpi = 300)
 # RenalFailure excluded from all four models (see Section 2).
 
 ## --- Model 1: ESS ---
-# m/15 budget ~4 predictors (m=67, smaller class among n=251)
+# m/15 budget ~4 predictors (m=66, smaller class among n=250 - updated after
+# the data refresh that shifted ESS's missingness from 17 to 18; the budget
+# conclusion is unchanged, but the exact n/m are current as of that update).
 # LiverDiagnosis collapsed to Hep C vs Other (1 df instead of 4) to fit budget,
 # since only the Hep C level was significant univariably.
 df_sleep$LiverDx_HepC <- factor(ifelse(df_sleep$LiverDiagnosis==1,"HepC","Other"))
@@ -467,7 +504,8 @@ df_qol <- df_qol %>%
     # "steroid" - and clarified as the factor-recoded version).
     Gender                       = factor(Gender, levels = c(1, 2),
                                           labels = c("Male", "Female")),
-    Liver_Diagnosis               = factor(LiverDiagnosis),
+    Liver_Diagnosis               = factor(LiverDiagnosis, levels = c(1,2,3,4,5),
+                                           labels = c("HepC","HepB","PSC_PBC_AHA","Alcohol","Other")),
     Recurrence_of_Disease         = factor(Recurrence, levels = c(0, 1),
                                            labels = c("No", "Yes")),
     Rejection_Graft_Dysfunction   = factor(Rejection, levels = c(0, 1),
@@ -484,6 +522,13 @@ df_qol <- df_qol %>%
     BMI                          = BMI,
     Time_From_Transplant           = TimeSinceTransplant
   )
+
+# Match the reference level used in the sleep-disturbance models (Section 0):
+# without this, factor() defaults to the lowest numeric code (Hep C) as the
+# reference, while df_sleep uses PSC/PBC/AHA - meaning every Liver_Diagnosis
+# coefficient in this report would otherwise be interpreted against a
+# different baseline depending on which analysis you're reading.
+df_qol$Liver_Diagnosis <- relevel(df_qol$Liver_Diagnosis, ref = "PSC_PBC_AHA")
 
 ## =============================================================================
 ## 9. SIMPLE RELATIONSHIPS: scatterplots + correlation (ESS, PSQI, AIS)
@@ -673,10 +718,20 @@ for (nm in names(qol_instruments)) {
 ## 11. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
 ## =============================================================================
 ## Rationale for NOT combining ESS + PSQI + AIS + BSS in a single model:
-##  - They are correlated measures of overlapping/related constructs
-##    (multicollinearity would inflate SEs and make coefficients unstable
-##    and hard to interpret - check with VIF below on a combined model to
-##    illustrate this).
+##  - They are correlated measures of overlapping/related constructs. Fit
+##    the "kitchen sink" model below and check its VIFs: these come out
+##    around 3.7-4.0 for PSQI/AIS, which is moderate collinearity by the
+##    VIF<5 threshold from Lecture 9 - not severe, and not on its own reason
+##    to distrust the combined model's coefficients. The stronger reasons to
+##    keep the four instruments in separate models are (a) each is a
+##    different construct (daytime sleepiness, overall sleep quality,
+##    insomnia, OSA risk - see the univariable heatmap), so a single shared
+##    coefficient obscures which facet of "sleep disturbance" is actually
+##    driving the QoL association, and (b) interpretability: "a one-point
+##    increase in PSQI is associated with an X-point change in PCS/MCS,
+##    holding covariates constant" is a clean, reportable statement, whereas
+##    a coefficient from a model with 4 correlated sleep terms is much
+##    harder to interpret on its own.
 ##  - PSQI has ~32% missingness in this dataset; forcing it into every
 ##    model would needlessly drop ~1/3 of subjects from all analyses.
 ##  - Interpretation is much cleaner one instrument at a time: "a one-point
@@ -687,6 +742,28 @@ for (nm in names(qol_instruments)) {
 ##   Age, Gender, BMI, Time_From_Transplant, Liver_Diagnosis,
 ##   Recurrence_of_Disease, Rejection_Graft_Dysfunction, Any_Fibrosis,
 ##   Renal_Failure, Depression, Corticosteroid_f
+##
+## CAUTION - Depression as a covariate here may be a mediator, not just a
+## confounder. In Analysis 3, Depression is the single most consistent
+## predictor of sleep disturbance (significant for PSQI and AIS, both binary
+## and continuous versions, after adjustment). If depression is on the causal
+## pathway from sleep disturbance to quality of life - e.g., poor sleep
+## contributes to depressed mood, which in turn lowers SF-36 MCS - rather
+## than being an independent common cause of both, then adjusting for it here
+## would partly remove the very effect these models are trying to estimate
+## (over-adjustment for a mediator). The reverse causal story is equally
+## plausible in this population: depression predating transplant, or
+## independent of it, could directly drive both poor sleep and poor QoL, in
+## which case adjusting for it is exactly correct (it's a genuine
+## confounder). The dataset alone cannot distinguish these two structures -
+## that would need longitudinal data on onset of depression relative to sleep
+## symptoms and QoL decline, which is not available here. This is a modeling
+## assumption to state explicitly in Methods/Limitations, not a bug to fix:
+## whichever framing you choose, name it, and consider reporting the
+## sleep-instrument coefficient both with and without Depression in the
+## covariate set as a sensitivity check, since a large shift in that
+## coefficient when Depression is dropped would itself be informative about
+## which structure is more likely.
 
 qol_covariates <- c("Age", "Gender", "BMI", "Time_From_Transplant",
                     "Liver_Diagnosis", "Recurrence_of_Disease",
@@ -741,10 +818,12 @@ for (key in names(adjusted_models)) {
   print(round(vif(m), 2))
 }
 
-## ---- 11c. Illustration: why NOT to combine all 4 instruments ---------------
+## ---- 11c. Illustration: why separate models are preferred over combining --
 ## Fit one combined ("kitchen sink") model on PCS with complete cases across
-## all four instruments simultaneously, purely to demonstrate collinearity /
-## sample-size loss - NOT recommended as a primary model.
+## all four instruments simultaneously, to illustrate the moderate collinearity
+## (VIF ~3.7-4.0 for PSQI/AIS - see printed output) and sample-size loss that
+## come from forcing all four sleep instruments into one model. Not used as a
+## primary model - the four separate models above remain the primary results.
 
 combined_data_qol <- df_qol %>%
   select(PCS, ESS, PSQI, AIS, BSS, all_of(qol_covariates)) %>%
