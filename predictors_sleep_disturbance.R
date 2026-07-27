@@ -179,7 +179,7 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
   scale_x_discrete(position = "top") +
   labs(x = NULL, y = NULL,
        title = "Univariable predictors of sleep disturbance, by instrument",
-       caption = "** p<0.01, * p<0.05, ^ p<0.10. Renal failure omitted (not estimable - see Section 2).") +
+       caption = "** p<0.01, * p<0.05, ^ p<0.10. Renal failure (grey/'n/e' cells) could not be\nestimated for ESS, PSQI, or Berlin due to complete separation (n=4 cases) - see Section 2.") +
   theme_minimal(base_size = 11) +
   theme(panel.grid = element_blank(),
         axis.text.x = element_text(face = "bold"),
