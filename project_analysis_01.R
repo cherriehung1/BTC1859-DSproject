@@ -4,10 +4,18 @@
 # Naming convention: everything in the sleep-disturbance analysis uses a
 # "_sleep" or "sleep_" prefix/dataframe (df_sleep); everything in the QoL
 # analysis uses a "_qol"/"qol_" prefix/dataframe (df_qol). The two halves
-# read the raw CSV independently and never share a variable name
+# read the raw CSV independently and never share a variable name, so neither
+# section can silently overwrite the other's objects.
+
+# Own (sleep disturbance, Analysis 3):
+#   univariable predictor analyses; logistic regression; adjusted models;
+#   odds ratios and 95% CI; model diagnostics; predictor table/forest plot;
+#   corresponding Methods + Results.
+# Also investigate odd issues such as renal failure having only four cases.
+# Presentation: Which patients are most likely to have sleep disturbance?
 
 # ---------------------------------------------------------------
-# SETUP: packages
+# SETUP: packages (all imports up front, used by BOTH halves of this script)
 # ---------------------------------------------------------------
 
 rm(list = ls())
@@ -159,17 +167,46 @@ heat_data$sig_label <- with(heat_data,
 
 # Add RenalFailure back in for visual completeness. It was excluded from the
 # univariable loop above because 3 of 4 outcomes hit complete separation
-# (see Section 2); only AIS produced an estimable OR. The "not estimable"
-# cells are shown as blank/grey tiles with an "n/e" label instead of a number.
-renal_rows <- data.frame(
-  outcome = c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
-  term    = "RenalFailure_f[Yes vs No]",
-  OR      = c(NA, NA, 2.45, NA),
-  CI_low  = NA, CI_high = NA,
-  p_value = c(NA, NA, 0.440, NA),
-  sig_label = c("n/e", "n/e", "2.45", "n/e")
-)
-heat_data <- rbind(heat_data, renal_rows)
+# (see Section 2). Rather than hardcoding the OR/p/n values by hand (which
+# would silently go stale if the data changes - exactly what happened when
+# ESS's n shifted from 251 to 250 after a data refresh), fit each of the
+# four RenalFailure univariable models here and read the numbers off the
+# fitted objects directly. Separation is detected via the actual glm()
+# warning rather than an eyeballed OR threshold.
+fit_renal_univariable <- function(outcome) {
+  sep_warning <- FALSE
+  m <- withCallingHandlers(
+    glm(as.formula(paste(outcome, "~ RenalFailure_f")), data = df_sleep, family = binomial),
+    warning = function(w) {
+      if (grepl("fitted probabilities numerically 0 or 1 occurred", conditionMessage(w))) {
+        sep_warning <<- TRUE
+      }
+      invokeRestart("muffleWarning")
+    }
+  )
+  n    <- nobs(m)
+  co   <- summary(m)$coefficients
+  term_name <- grep("RenalFailure", rownames(co), value = TRUE)
+  
+  if (sep_warning || length(term_name) == 0) {
+    return(data.frame(outcome = outcome, term = "RenalFailure_f[Yes vs No]",
+                      OR = NA, CI_low = NA, CI_high = NA, p_value = NA,
+                      sig_label = "n/e", n = n))
+  }
+  
+  beta <- co[term_name, "Estimate"]
+  p    <- co[term_name, "Pr(>|z|)"]
+  ci   <- tryCatch(confint(m)[term_name, ], error = function(e) c(NA, NA))
+  OR   <- exp(beta)
+  star <- ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", ifelse(p < 0.10, "^", "")))
+  data.frame(outcome = outcome, term = "RenalFailure_f[Yes vs No]",
+             OR = OR, CI_low = exp(ci[1]), CI_high = exp(ci[2]), p_value = p,
+             sig_label = paste0(round(OR, 2), star), n = n)
+}
+
+renal_rows <- bind_rows(lapply(c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
+                               fit_renal_univariable))
+heat_data <- rbind(heat_data, renal_rows[, names(heat_data)])
 
 heat_data$outcome <- factor(heat_data$outcome,
                             levels = c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary"),
@@ -186,7 +223,9 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
   scale_x_discrete(position = "top") +
   labs(x = NULL, y = NULL,
        title = "Univariable predictors of sleep disturbance, by instrument",
-       caption = "** p<0.01, * p<0.05, ^ p<0.10. Renal failure (grey/'n/e' cells) could not be\nestimated for ESS, PSQI, or Berlin due to complete separation (n=4 cases) - see Section 2.") +
+       caption = paste0("** p<0.01, * p<0.05, ^ p<0.10. Renal failure (grey/'n/e' cells) could not be\n",
+                        "estimated for some outcomes due to complete separation (n=",
+                        sum(df_sleep$RenalFailure == 1, na.rm = TRUE), " cases) - see Section 2.")) +
   theme_minimal(base_size = 11) +
   theme(panel.grid = element_blank(),
         axis.text.x = element_text(face = "bold"),
@@ -288,9 +327,30 @@ summary(ess_lin);  shapiro.test(resid(ess_lin))
 summary(psqi_lin); shapiro.test(resid(psqi_lin))
 summary(ais_lin);  shapiro.test(resid(ais_lin))
 
+# Shapiro-Wilk alone only tests normality of residuals, and says nothing
+# about linearity, homoscedasticity, or influential/leverage points - the
+# same 4-panel diagnostic already used for the 8 QoL models in Section 11b
+# is added here for consistency: Residuals vs Fitted (linearity/
+# homoscedasticity), Normal Q-Q (normality - the visual counterpart to the
+# Shapiro-Wilk test above), Scale-Location (homoscedasticity, another view),
+# and Residuals vs Leverage (Cook's distance / influential cases).
+continuous_sleep_models <- list(ess_lin = ess_lin, psqi_lin = psqi_lin, ais_lin = ais_lin)
+for (model_name in names(continuous_sleep_models)) {
+  m <- continuous_sleep_models[[model_name]]
+  png(paste0("diagnostics_", model_name, ".png"), width = 800, height = 800)
+  par(mfrow = c(2, 2))
+  plot(m)
+  dev.off()
+}
+
 # Residuals show mild non-normality (Shapiro-Wilk p<0.001 for all three) -
 # common for right-skewed psychometric scores. With n=180-260, OLS estimates
 # remain reasonably robust; note this as a limitation rather than a fatal flaw.
+# Check the saved diagnostics_*.png files for: any curvature in Residuals vs
+# Fitted (would indicate a linearity violation), funnel shapes in
+# Scale-Location (heteroscedasticity), and any point with Cook's distance
+# > 1 in Residuals vs Leverage (an influential case worth investigating
+# individually, e.g. is it one of the 4 renal-failure patients?).
 # NOTE: using the continuous ESS score, "Rejection" is significant (p=0.006)
 # even though it was only borderline (p=0.068) in the binary ESS model -
 # a concrete example of information lost by dichotomizing at the cutoff.
@@ -300,10 +360,14 @@ summary(ais_lin);  shapiro.test(resid(ais_lin))
 # ---------------------------------------------------------------
 
 # Tidy a glm model's output (OR, 95% CI, p) into a plotting data frame,
-# excluding the intercept row
-tidy_glm <- function(model, outcome_label) {
+# excluding the intercept row. The facet label's sample size is read directly
+# off the fitted model (nobs()) rather than typed by hand, so it can't go
+# stale if the underlying data changes later (as happened when ESS's n moved
+# from 251 to 250 after a data refresh).
+tidy_glm <- function(model, outcome_name) {
   co <- summary(model)$coefficients
   ci <- confint(model)
+  outcome_label <- paste0(outcome_name, " (n=", nobs(model), ")")
   data.frame(
     outcome  = outcome_label,
     term     = rownames(co)[-1],
@@ -316,10 +380,10 @@ tidy_glm <- function(model, outcome_label) {
 }
 
 forest_data <- rbind(
-  tidy_glm(ess_model,    "ESS (n=251)"),
-  tidy_glm(psqi_model,   "PSQI (n=183)"),
-  tidy_glm(ais_model,    "AIS (n=262)"),
-  tidy_glm(berlin_model, "Berlin (n=237)")
+  tidy_glm(ess_model,    "ESS"),
+  tidy_glm(psqi_model,   "PSQI"),
+  tidy_glm(ais_model,    "AIS"),
+  tidy_glm(berlin_model, "Berlin")
 )
 
 forest_data$sig  <- factor(ifelse(forest_data$p.value < 0.05, "p < 0.05", "n.s."),
@@ -327,9 +391,14 @@ forest_data$sig  <- factor(ifelse(forest_data$p.value < 0.05, "p < 0.05", "n.s."
 # preserve model-fit order (reversed so first predictor plots at the top)
 forest_data$term <- factor(forest_data$term,
                            levels = rev(unique(forest_data$term)))
-forest_data$outcome <- factor(forest_data$outcome,
-                              levels = c("ESS (n=251)","PSQI (n=183)",
-                                         "AIS (n=262)","Berlin (n=237)"))
+# facet order, built from the same dynamic labels used above (not hardcoded)
+outcome_facet_order <- c(
+  paste0("ESS (n=", nobs(ess_model), ")"),
+  paste0("PSQI (n=", nobs(psqi_model), ")"),
+  paste0("AIS (n=", nobs(ais_model), ")"),
+  paste0("Berlin (n=", nobs(berlin_model), ")")
+)
+forest_data$outcome <- factor(forest_data$outcome, levels = outcome_facet_order)
 
 # creating the forest plot
 forest_plot <- ggplot(forest_data, aes(x = OR, y = term, color = sig)) +
