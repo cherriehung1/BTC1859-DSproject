@@ -761,13 +761,15 @@ write.csv(cor_results_qol, "correlation_results_sleep_vs_qol.csv", row.names = F
 ## =============================================================================
 ## 9. QoL COMPARISON BETWEEN DISTURBED vs. NON-DISTURBED GROUPS
 ## =============================================================================
-## For each instrument (ESS, PSQI, AIS, Berlin): compare mean PCS and mean MCS
-## between the "disturbed" and "not disturbed" groups.
-## Primary test: Welch two-sample t-test (does NOT assume equal variances -
-## more defensible by default than Student's t-test).
+## For each instrument (ESS, PSQI, AIS, Berlin): the mean PCS and mean MCS
+## between the "disturbed" and "not disturbed" groups were compared.
+## Primary test: Welch two-sample t-test (does NOT assume equal variances)
 ## Secondary/robustness check: Wilcoxon rank-sum test, reported if normality
 ## or equal-variance assumptions look seriously violated (e.g. via
 ## Shapiro-Wilk test and visual inspection of boxplots/QQ-plots).
+
+# However, the results of the Shapiro-Wilk test found that all 8 groups violated
+# the normality assumption so the primary test relied on was the Wilcoxon rank-sum test.
 
 compare_groups <- function(data, group_var, outcome_var, sleep_label) {
   d <- data %>% select(grp = all_of(group_var), y = all_of(outcome_var)) %>%
@@ -820,6 +822,18 @@ print(pcs_table_qol)
 cat("\n--- Mental QoL (MCS) by disturbance group ---\n")
 print(mcs_table_qol)
 
+# The Shapiro-Wilk tests indicated non-normality in at least one group for all eight 
+# comparisons (all p < .05), which was consistent with the moderate skewness seen in the sleep measures. Given that 
+# the normality assumption did not hold, the Wilcoxon rank-sum test was used as the primary test.
+#
+# Using a significance level of alpha = 0.05, the null hypothesis that the distributions of PCS/MCS scores 
+# did not differ between non-disturbed vs. disturbed groups was rejected for all eight comparisons, 
+# since all Wilcoxon p-values were below 0.05. This provides evidence that sleep disturbance was associated with 
+# lower physical and mental quality of life across all four sleep measures.
+#
+# Results from Welch's t-test and Wilcoxon were consistent in direction and significance across all 
+# comparisons, suggesting the non-normality did not materially affect the conclusions.
+                                  
 write.csv(pcs_table_qol, "group_comparison_PCS.csv", row.names = FALSE)
 write.csv(mcs_table_qol, "group_comparison_MCS.csv", row.names = FALSE)
 
