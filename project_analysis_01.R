@@ -13,7 +13,7 @@
 
 rm(list = ls())
 
-required_packages <- c("ggplot2", "car", "dplyr", "stringr", "broom", "knitr")
+required_packages <- c("ggplot2", "car", "dplyr", "stringr", "broom", "knitr", "MASS")
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
   library(pkg, character.only = TRUE)
@@ -303,6 +303,19 @@ ess_full <- glm(ESS_binary ~ Gender_f + LiverDiagnosis_f + Recurrence_f + Reject
                 data=df_sleep, family=binomial)
 anova(ess_model, ess_full, test="Chisq")   # non-significant -> simpler model preferred
 
+# ESS: full p<0.20-screened candidate set (using the full 4-level LiverDiagnosis_f,
+# not the ess_model's collapsed HepC-vs-Other version, so AIC can decide for itself
+# whether to keep it whole, drop it, or - unlike the primary model - it can only
+# keep/drop the whole factor, not collapse individual levels)
+ess_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("ESS_binary","Gender_f","LiverDiagnosis_f",
+                                                            "Recurrence_f","Rejection_f","AnyFibrosis_f",
+                                                            "Depression_f","Corticosteroid_f")]), ]
+ess_full_forstep <- glm(ESS_binary ~ Gender_f + LiverDiagnosis_f + Recurrence_f + Rejection_f +
+                          AnyFibrosis_f + Depression_f + Corticosteroid_f,
+                        data = ess_stepwise_subset, family = binomial)
+ess_step <- stepAIC(ess_full_forstep, direction = "both", trace = TRUE)
+summary(ess_step)
+
 ## --- Model 2: PSQI ---
 # m/15 budget ~4 predictors (m=66, smaller class among n=183)
 psqi_model <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f,
@@ -327,6 +340,16 @@ psqi_model_samesub <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f 
 psqi_full_samesub  <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
                           data=psqi_subset, family=binomial)
 anova(psqi_model_samesub, psqi_full_samesub, test="Chisq")  # BMI does not improve fit significantly, n=165 for both
+
+# PSQI example - pre-subset to the shared complete-case set FIRST,
+# same fix as the psqi_model/psqi_full anova() comparison, to avoid
+# stepAIC() comparing models fit on different samples as BMI drops in/out
+psqi_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("PSQI_binary","Gender_f","Recurrence_f",
+                                                             "AnyFibrosis_f","Depression_f","BMI")]), ]
+psqi_full_forstep <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
+                         data = psqi_stepwise_subset, family = binomial)
+psqi_step <- stepAIC(psqi_full_forstep, direction = "both", trace = TRUE)
+summary(psqi_step)
 
 ## --- Model 3: AIS ---
 # m/15 budget ~7-8 predictors (m=117, smaller class among n=262)
@@ -380,6 +403,17 @@ cat("n (Age subset):", nobs(ais_model_samesub_age),
     " | n (TimeSinceTransplant subset):", nobs(ais_model_samesub_tst),
     " | n (both subset):", nobs(ais_model_samesub_both), "\n")
 
+# AIS check - widen the scope to include everything that passed p<0.20,
+# including Age/TimeSinceTransplant/Corticosteroid, pre-subset the same way
+ais_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+                                                            "AnyFibrosis_f","Depression_f","Corticosteroid_f",
+                                                            "Age","TimeSinceTransplant")]), ]
+ais_full_forstep <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
+                          Corticosteroid_f + Age + TimeSinceTransplant,
+                        data = ais_stepwise_subset, family = binomial)
+ais_step <- stepAIC(ais_full_forstep, direction = "both", trace = TRUE)
+summary(ais_step)
+
 ## --- Model 4: Berlin ---
 # m/15 budget: m should be computed on the sample the model actually runs on,
 # not just Berlin_binary's own availability. Berlin_binary alone has n=262
@@ -392,6 +426,17 @@ berlin_model <- glm(Berlin_binary ~ Age + BMI + TimeSinceTransplant,
 summary(berlin_model)
 round(cbind(OR=exp(coef(berlin_model)), exp(confint(berlin_model))), 3)
 vif(berlin_model)
+
+# Berlin: note the full p<0.20-screened set (Age, BMI, TimeSinceTransplant) is
+# already identical to berlin_model's current 3 predictors - no other candidate
+# passed the p<0.20 screen for Berlin, so this mainly checks whether AIC would
+# trim any of the three, rather than testing a genuinely larger candidate pool
+berlin_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("Berlin_binary","Age","BMI",
+                                                               "TimeSinceTransplant")]), ]
+berlin_full_forstep <- glm(Berlin_binary ~ Age + BMI + TimeSinceTransplant,
+                           data = berlin_stepwise_subset, family = binomial)
+berlin_step <- stepAIC(berlin_full_forstep, direction = "both", trace = TRUE)
+summary(berlin_step)
 
 # ---------------------------------------------------------------
 # 5. SENSITIVITY ANALYSIS: CONTINUOUS SLEEP SCORES (linear regression)
