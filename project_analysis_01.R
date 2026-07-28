@@ -476,11 +476,36 @@ forest_data <- rbind(
   tidy_glm(berlin_model, "Berlin")
 )
 
-forest_data$sig  <- factor(ifelse(forest_data$p.value < 0.05, "p < 0.05", "n.s."),
-                           levels = c("p < 0.05","n.s."))
+# Significance flag - drives the black (p<0.05) vs grey (n.s.) point/CI color
+# in the plot below via aes(color = sig)
+forest_data$sig <- factor(ifelse(forest_data$p.value < 0.05, "p < 0.05", "n.s."),
+                          levels = c("p < 0.05", "n.s."))
+
+# Clean, readable predictor labels (mirrors the heatmap's term_labels in
+# Section 3b, extended to cover every dummy-coded term that actually appears
+# across the four adjusted models - including model-specific forms like
+# LiverDx_HepCOther (ESS's collapsed factor) and the full 4-level
+# LiverDiagnosis_f dummies (AIS's model), which are named differently from
+# each other and from the heatmap's own LiverDiagnosis_f terms)
+forest_term_labels <- c(
+  "Gender_fFemale"          = "Gender (Female)",
+  "LiverDx_HepCOther"       = "Liver Dx: Other vs. Hep C",
+  "Recurrence_fYes"         = "Recurrence",
+  "Rejection_fYes"          = "Rejection",
+  "AnyFibrosis_fYes"        = "Any Fibrosis",
+  "Depression_fYes"         = "Depression",
+  "LiverDiagnosis_fHepC"    = "Liver Dx: Hep C",
+  "LiverDiagnosis_fHepB"    = "Liver Dx: Hep B",
+  "LiverDiagnosis_fAlcohol" = "Liver Dx: Alcohol",
+  "LiverDiagnosis_fOther"   = "Liver Dx: Other",
+  "Age"                     = "Age",
+  "BMI"                     = "BMI",
+  "TimeSinceTransplant"     = "Time Since Transplant"
+)
+forest_data$term <- forest_term_labels[as.character(forest_data$term)]
 # preserve model-fit order (reversed so first predictor plots at the top)
-forest_data$term <- factor(forest_data$term,
-                           levels = rev(unique(forest_data$term)))
+forest_data$term <- factor(forest_data$term, levels = rev(unique(forest_data$term)))
+
 # facet order, built from the same dynamic labels used above (not hardcoded)
 outcome_facet_order <- c(
   paste0("ESS (n=", nobs(ess_model), ")"),
@@ -499,7 +524,7 @@ forest_plot <- ggplot(forest_data, aes(x = OR, y = term, color = sig)) +
   scale_color_manual(values = c("p < 0.05" = "black", "n.s." = "grey60")) +
   facet_wrap(~ outcome, scales = "free_y", ncol = 2) +
   labs(x = "Adjusted Odds Ratio (95% CI, log scale)", y = NULL, color = NULL,
-       title = "Adjusted odds ratios for predictors of sleep disturbance, by instrument") +
+       title = str_wrap("Adjusted odds ratios for predictors of sleep disturbance, by instrument", width = 55)) +
   theme_bw(base_size = 11) +
   theme(legend.position = "bottom",
         strip.text = element_text(face = "bold"),
