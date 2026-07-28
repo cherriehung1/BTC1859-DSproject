@@ -838,6 +838,7 @@ write.csv(pcs_table_qol, "group_comparison_PCS.csv", row.names = FALSE)
 write.csv(mcs_table_qol, "group_comparison_MCS.csv", row.names = FALSE)
 
 ## Boxplots to accompany the tables
+
 make_boxplot <- function(data, group_var, outcome_var, ylab, title) {
   d <- data %>% filter(!is.na(.data[[group_var]]), !is.na(.data[[outcome_var]]))
   ggplot(d, aes(x = .data[[group_var]], y = .data[[outcome_var]])) +
@@ -847,16 +848,18 @@ make_boxplot <- function(data, group_var, outcome_var, ylab, title) {
     theme_bw()
 }
 
-for (nm in names(qol_instruments)) {
-  gv <- qol_instruments[[nm]]
-  ggsave(paste0("box_", nm, "_PCS.png"),
-         make_boxplot(df_qol, gv, "PCS", "SF-36 PCS", paste(nm, "- Physical QoL")),
-         width = 4.5, height = 4)
-  ggsave(paste0("box_", nm, "_MCS.png"),
-         make_boxplot(df_qol, gv, "MCS", "SF-36 MCS", paste(nm, "- Mental QoL")),
-         width = 4.5, height = 4)
+plot_list <- list()
+for (nm in names(instruments)) {
+  gv <- instruments[[nm]]
+  plot_list[[paste0(nm, "_PCS")]] <- make_boxplot(df, gv, "PCS", "SF-36 PCS", paste(nm, "- Physical QoL"))
+  plot_list[[paste0(nm, "_MCS")]] <- make_boxplot(df, gv, "MCS", "SF-36 MCS", paste(nm, "- Mental QoL"))
 }
 
+combined_panel <- wrap_plots(plot_list, ncol = 2) +
+  plot_annotation(title = "Quality of Life by Sleep Disturbance Group")
+
+ggsave("combined_boxplots.png", combined_panel,
+       width = 9, height = 4 * length(instruments), dpi = 300)
 ## =============================================================================
 ## 10. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
 ## =============================================================================
