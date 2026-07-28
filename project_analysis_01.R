@@ -7,13 +7,6 @@
 # read the raw CSV independently and never share a variable name, so neither
 # section can silently overwrite the other's objects.
 
-# Own (sleep disturbance, Analysis 3):
-#   univariable predictor analyses; logistic regression; adjusted models;
-#   odds ratios and 95% CI; model diagnostics; predictor table/forest plot;
-#   corresponding Methods + Results.
-# Also investigate odd issues such as renal failure having only four cases.
-# Presentation: Which patients are most likely to have sleep disturbance?
-
 # ---------------------------------------------------------------
 # SETUP: packages (all imports up front, used by BOTH halves of this script)
 # ---------------------------------------------------------------
@@ -274,11 +267,11 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
 # signal along with noise (a strict Bonferroni threshold here, ~0.05/56,
 # would leave only BMI->Berlin and barely Depression->PSQI standing).
 #
-# Practical takeaway for interpretation: findings that replicate across
-# multiple outcomes and multiple analytic approaches (e.g., Depression's
-# association with both PSQI and AIS, in both the binary and continuous-score
-# models) should be treated as more robust than single-outcome, borderline
-# findings (e.g., Any Fibrosis for ESS, p~0.05), which may reflect sampling
+# Findings that replicate across multiple outcomes and multiple analytic 
+# approaches (e.g., Depression's association with both PSQI and AIS, 
+# in both the binary and continuous-score models) should be treated as more 
+# robust than single-outcome, borderline findings 
+# (e.g., Any Fibrosis for ESS, p~0.05), which may reflect sampling
 # variability in a moderate sample (n=183-262) rather than a true effect.
 
 # ---------------------------------------------------------------
@@ -287,13 +280,12 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
 
 # Predictor sets were chosen by: (a) univariable screening at p<0.20, then
 # (b) trimming to respect the rule-of-thumb sample size restriction
-# (p < m/15, where m = size of the smaller outcome class - see Lecture 9).
+# (p < m/15, where m = size of the smaller outcome class)
 # RenalFailure excluded from all four models (see Section 2).
 
 ## --- Model 1: ESS ---
 # m/15 budget ~4 predictors (m=66, smaller class among n=250 - updated after
-# the data refresh that shifted ESS's missingness from 17 to 18; the budget
-# conclusion is unchanged, but the exact n/m are current as of that update).
+# the data refresh that shifted ESS's missingness from 17 to 18
 # LiverDiagnosis collapsed to Hep C vs Other (1 df instead of 4) to fit budget,
 # since only the Hep C level was significant univariably.
 df_sleep$LiverDx_HepC <- factor(ifelse(df_sleep$LiverDiagnosis==1,"HepC","Other"))
@@ -353,8 +345,7 @@ anova(ais_model, ais_full, test="Chisq")   # Corticosteroid does not improve fit
 # anova() - unlike BMI (PSQI, Section 4 Model 2) and Corticosteroid (AIS,
 # just above), which both got an explicit "add + anova()" test. Testing
 # here for consistency. ais_model is already at 4 of 7-8 available df
-# (m/15 rule, m=117), so this is a sensitivity check, not a candidate for
-# the final model, unless the improvement in fit is compelling.
+# (m/15 rule, m=117), so this is a sensitivity check
 
 # Same anova() requirement as the PSQI/BMI comparison above: refit ais_model
 # on the SAME complete-case subset as each expanded model before comparing,
@@ -446,7 +437,7 @@ for (model_name in names(continuous_sleep_models)) {
 # a concrete example of information lost by dichotomizing at the cutoff.
 
 # ---------------------------------------------------------------
-# 6. FOREST PLOT OF ADJUSTED ODDS RATIOS (ggplot2, faceted)
+# 6. FOREST PLOT OF ADJUSTED ODDS RATIOS 
 # ---------------------------------------------------------------
 
 # Tidy a glm model's output (OR, 95% CI, p) into a plotting data frame,
