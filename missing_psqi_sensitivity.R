@@ -382,8 +382,8 @@ weighted_confidence_intervals <- t(
 complete_case_coefficients <- summary(
   psqi_complete_case_model
 )$coefficients
-complete_case_confidence_intervals <- confint.default(
-  psqi_complete_case_model
+complete_case_confidence_intervals <- suppressMessages(
+  confint(psqi_complete_case_model)
 )
 
 term_labels <- c(
