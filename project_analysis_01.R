@@ -860,15 +860,24 @@ combined_panel <- wrap_plots(plot_list, ncol = 2) +
 
 ggsave("combined_boxplots.png", combined_panel,
        width = 9, height = 4 * length(instruments), dpi = 300)
+
+# Boxplots of QoL scores by sleep disturbance group showed consistently lower medians in the "Disturbed" group across 
+# all four sleep instruments (ESS, PSQI, AIS, Berlin) and both QoL domains (PCS, MCS), matching the significant differences 
+# found in the Wilcoxon and Welch t-tests. Separation between groups was most pronounced for PSQI and AIS on Mental QoL, 
+# where the two groups' boxes showed minimal overlap, while Berlin showed the weakest separation, particularly for Mental QoL, 
+# where the boxes overlapped substantially which aligned with it having the largest (though still significant) p-value in the 
+# group comparisons. 
+
+
+                                  
 ## =============================================================================
 ## 10. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
 ## =============================================================================
 ## Rationale for NOT combining ESS + PSQI + AIS + BSS in a single model:
-##  - They are correlated measures of overlapping/related constructs. Fit
-##    the "kitchen sink" model below and check its VIFs: these come out
+##  - They are correlated measures of overlapping/related constructs. Instead, use
+##    all covariates for each sleep instrument and check VIFs: these come out
 ##    around 3.7-4.0 for PSQI/AIS, which is moderate collinearity by the
-##    VIF<5 threshold from Lecture 9 - not severe, and not on its own reason
-##    to distrust the combined model's coefficients. The stronger reasons to
+##    VIF<5 threshold. The stronger reasons to
 ##    keep the four instruments in separate models are (a) each is a
 ##    different construct (daytime sleepiness, overall sleep quality,
 ##    insomnia, OSA risk - see the univariable heatmap), so a single shared
@@ -880,9 +889,7 @@ ggsave("combined_boxplots.png", combined_panel,
 ##    harder to interpret on its own.
 ##  - PSQI has ~32% missingness in this dataset; forcing it into every
 ##    model would needlessly drop ~1/3 of subjects from all analyses.
-##  - Interpretation is much cleaner one instrument at a time: "a one-point
-##    increase in PSQI is associated with an X-point change in PCS/MCS,
-##    holding covariates constant."
+                                  
 ##
 ## Adjustment set (per the assignment's demographic/clinical variable list):
 ##   Age, Gender, BMI, Time_From_Transplant, Liver_Diagnosis,
@@ -949,8 +956,8 @@ for (key in names(adjusted_models)) {
   cat("Adjusted R-squared:", round(summary(m$fit)$adj.r.squared, 3), "\n")
 }
 
-## ---- 10. Diagnostics for each fitted model ---------------------------------
-## Check: linearity/homoscedasticity (residuals vs fitted), normality of
+## ---- 10b. Diagnostics for each fitted model ---------------------------------
+## PLots linearity/homoscedasticity (residuals vs fitted), normality of
 ## residuals (QQ-plot), and multicollinearity (VIF) for every model.
 
 for (key in names(adjusted_models)) {
@@ -965,10 +972,10 @@ for (key in names(adjusted_models)) {
 }
 
 ## ---- 10c. Illustration: why separate models are preferred over combining --
-## Fit one combined ("kitchen sink") model on PCS with complete cases across
+## Fit one combined model on PCS with complete cases across
 ## all four instruments simultaneously, to illustrate the moderate collinearity
 ## (VIF ~3.7-4.0 for PSQI/AIS - see printed output) and sample-size loss that
-## come from forcing all four sleep instruments into one model. Not used as a
+## comes from forcing all four sleep instruments into one model. Not used as a
 ## primary model - the four separate models above remain the primary results.
 
 combined_data_qol <- df_qol %>%
@@ -989,8 +996,11 @@ combined_fit_qol <- lm(PCS ~ ESS + PSQI + AIS + BSS +
 cat("\nVIFs in the combined ('kitchen sink') model (illustrative only):\n")
 print(round(vif(combined_fit_qol), 2))
 
-## ---- 11d. Extract a clean summary table of the sleep-instrument coefficient
-##      (i.e., the adjusted effect of each sleep measure on each outcome) -----
+
+
+                                  
+## ---- 10d. Extract a clean summary table of the sleep-instrument coefficient
+##      (the adjusted effect of each sleep measure on each outcome) -----
 
 extract_sleep_coef <- function(key) {
   m <- adjusted_models[[key]]$fit
@@ -1041,7 +1051,7 @@ extract_full_model <- function(key) {
 
 full_model_results_qol <- bind_rows(lapply(names(adjusted_models), extract_full_model))
 
-# Optional: flag which terms are significant at the 0.05 level, for quick scanning
+#Flag which terms are significant at the 0.05 level, for quick scanning
 full_model_results_qol <- full_model_results_qol %>%
   mutate(significant = ifelse(p.value < 0.05, "*", ""))
 
