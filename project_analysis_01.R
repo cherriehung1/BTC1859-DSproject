@@ -531,15 +531,15 @@ ggsave("forest_plot_sleep_disturbance.png",
 
 # =================================================================
 # ANALYSIS 2: SF36 QUALITY OF LIFE (linear regression)
-# All objects in this analysis use df_qol and are prefixed qol_/_qol
+# All objects in this section use df_qol and are prefixed qol_/_qol
 # where a name might otherwise be ambiguous. This is an INDEPENDENT read of
-# the same source CSV (own na.strings handling) - it never touches or
-# overwrites df_sleep or any object created in Analysis 3 above.
+# the same source CSV - it never touches or
+# overwrites df_sleep or any object created in Analysis 1 above.
 # =================================================================
 
 df_qol <- read.csv("project_data_cleaned.csv", na.strings = c("NA", ""))
 
-## ---- 8. Recode / label variables we need -----------------------------------
+## ---- 7. Recode / label variables we need -----------------------------------
 
 df_qol <- df_qol %>%
   mutate(
@@ -575,6 +575,8 @@ df_qol <- df_qol %>%
                                           labels = c("Male", "Female")),
     Liver_Diagnosis               = factor(LiverDiagnosis, levels = c(1,2,3,4,5),
                                            labels = c("HepC","HepB","PSC_PBC_AHA","Alcohol","Other")),
+    Liver_Diagnosis <- relevel(LiverDiagnosis, ref="PSC_PBC_AHA")  # largest group as reference (same as before)
+    
     Recurrence_of_Disease         = factor(Recurrence, levels = c(0, 1),
                                            labels = c("No", "Yes")),
     Rejection_Graft_Dysfunction   = factor(Rejection, levels = c(0, 1),
@@ -592,20 +594,14 @@ df_qol <- df_qol %>%
     Time_From_Transplant           = TimeSinceTransplant
   )
 
-# Match the reference level used in the sleep-disturbance models (Section 0):
-# without this, factor() defaults to the lowest numeric code (Hep C) as the
-# reference, while df_sleep uses PSC/PBC/AHA - meaning every Liver_Diagnosis
-# coefficient in this report would otherwise be interpreted against a
-# different baseline depending on which analysis you're reading.
-df_qol$Liver_Diagnosis <- relevel(df_qol$Liver_Diagnosis, ref = "PSC_PBC_AHA")
 
 ## =============================================================================
-## 9. SIMPLE RELATIONSHIPS: scatterplots + correlation (ESS, PSQI, AIS)
+## 8. SIMPLE RELATIONSHIPS: scatterplots + correlation (ESS, PSQI, AIS)
 ## =============================================================================
-## Berlin is binary, so a scatterplot/correlation does not apply to it here;
-## it is handled instead in the group-comparison step (section 10).
+## Berlin is binary, so a scatterplot/correlation does not apply here.
+## Handled in the group-comparison step (section 10).
 
-## ---- 9a. Scatterplots -------------------------------------------------------
+## ---- 8a. Scatterplots -------------------------------------------------------
 
 plot_scatter <- function(data, xvar, xlab) {
   p_pcs <- ggplot(data, aes(x = .data[[xvar]], y = PCS)) +
@@ -637,7 +633,7 @@ ggsave("scatter_PSQI_MCS.png", psqi_plots_qol$mcs, width = 5, height = 4)
 ggsave("scatter_AIS_PCS.png",  ais_plots_qol$pcs,  width = 5, height = 4)
 ggsave("scatter_AIS_MCS.png",  ais_plots_qol$mcs,  width = 5, height = 4)
 
-# Optional: combined 3x2 grid if patchwork is available
+# Combined 3x2 grid using patchwork
 if (requireNamespace("patchwork", quietly = TRUE)) {
   library(patchwork)
   combined_scatter_qol <- (ess_plots_qol$pcs | ess_plots_qol$mcs) /
@@ -646,12 +642,15 @@ if (requireNamespace("patchwork", quietly = TRUE)) {
   ggsave("scatter_all_sleep_vs_qol.png", combined_scatter_qol, width = 10, height = 12)
 }
 
-## ---- 9b. Correlations --------------------------------------------------------
+                   
+## ---- 8b. Correlations --------------------------------------------------------
 ## Decision rule: use Pearson by default; switch to Spearman if a scatterplot
 ## shows a clearly non-linear (but still monotonic) pattern, or if a variable
 ## is markedly skewed / has influential outliers (PSQI and AIS scores from
 ## symptom-questionnaires are typically right-skewed with a floor effect at 0,
 ## which is a common reason to prefer Spearman for these instruments).
+
+
 
 check_skew <- function(x) {
   x <- x[!is.na(x)]
@@ -668,6 +667,15 @@ skew_tbl_qol <- rbind(
 )
 print(round(skew_tbl_qol, 2))
 
+# All six scatterplots roughly follow a negative linear trend which supports the use of Pearson. # Skewness values were 0.62, 0.6, and 0.82, for ESS, PSQI, and AIS, respectively. 
+# Since these values indicate moderate skewness (between 0.5 and 1), Pearson's test could be justifiably used for all three.
+# However, the outliers present on these scatterplots could be influencing the Pearson coefficient values.
+# Therefore, both Pearson and Spearman's tests will be conducted to observe differences. If differences are minimal, 
+# then Pearson will be selected since it is more directly interpretable given that the assumptions have been met.
+# If Pearson and Spearman values diverge meaningfully (by more than 0.1), Spearman will be reported instead, 
+# as this would suggest the outliers or residual skew are distorting the Pearson estimate. 
+# This comparison and decision will be made independently for each of the six correlation pairs.
+                   
 cor_test_both <- function(x, y, xname, yname) {
   ok <- complete.cases(x, y)
   pear <- cor.test(x[ok], y[ok], method = "pearson")
@@ -691,15 +699,22 @@ cor_results_qol <- bind_rows(
 )
 
 print(cor_results_qol)
-# In the report: report Pearson's r when skewness is modest and the
-# scatterplot/loess trend looks linear; report Spearman's rho (and explain why)
-# for any instrument-outcome pair where skewness is high (e.g., |skew| > 1)
-# or the scatterplot suggests a monotonic-but-curved relationship.
 
 write.csv(cor_results_qol, "correlation_results_sleep_vs_qol.csv", row.names = FALSE)
 
+# Since the Pearson and Spearman values for all 6 plots are within 0.1, Pearson will be used for all six plots.
+# Using a significance value of alpha = 0.05, the null hypothesis, that correlation is 0, is rejected 
+# for all six sleep measure - QoL pairs (all p < .001).
+# This provides evidence that greater sleep disturbance (higher ESS, PSQI, and AIS scores) is 
+# associated with lower quality of life, across both physical (PCS) and mental (MCS) domains. 
+# The strength of these associations varies by sleep measure and QoL domain: AIS and PSQI show 
+# moderate-to-strong negative correlations with QoL (r = -.35 to -.55), while ESS shows comparatively 
+# weaker correlations (r = -.28 to -.30). Across all three sleep measures, the association with MCS 
+# is stronger than with PCS, suggesting sleep disturbance may relate more closely to mental than 
+# physical quality of life in this sample.
+
 ## =============================================================================
-## 10. QoL COMPARISON BETWEEN DISTURBED vs. NON-DISTURBED GROUPS
+## 9. QoL COMPARISON BETWEEN DISTURBED vs. NON-DISTURBED GROUPS
 ## =============================================================================
 ## For each instrument (ESS, PSQI, AIS, Berlin): compare mean PCS and mean MCS
 ## between the "disturbed" and "not disturbed" groups.
@@ -784,7 +799,7 @@ for (nm in names(qol_instruments)) {
 }
 
 ## =============================================================================
-## 11. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
+## 10. ADJUSTED LINEAR REGRESSION (one sleep instrument at a time)
 ## =============================================================================
 ## Rationale for NOT combining ESS + PSQI + AIS + BSS in a single model:
 ##  - They are correlated measures of overlapping/related constructs. Fit
@@ -860,7 +875,7 @@ for (s in qol_sleep_vars) {
   }
 }
 
-## ---- 11a. Print tidy summaries for each model -------------------------------
+## ---- 10a. Print tidy summaries for each model -------------------------------
 
 for (key in names(adjusted_models)) {
   m <- adjusted_models[[key]]
@@ -872,7 +887,7 @@ for (key in names(adjusted_models)) {
   cat("Adjusted R-squared:", round(summary(m$fit)$adj.r.squared, 3), "\n")
 }
 
-## ---- 11b. Diagnostics for each fitted model ---------------------------------
+## ---- 10. Diagnostics for each fitted model ---------------------------------
 ## Check: linearity/homoscedasticity (residuals vs fitted), normality of
 ## residuals (QQ-plot), and multicollinearity (VIF) for every model.
 
@@ -887,7 +902,7 @@ for (key in names(adjusted_models)) {
   print(round(vif(m), 2))
 }
 
-## ---- 11c. Illustration: why separate models are preferred over combining --
+## ---- 10c. Illustration: why separate models are preferred over combining --
 ## Fit one combined ("kitchen sink") model on PCS with complete cases across
 ## all four instruments simultaneously, to illustrate the moderate collinearity
 ## (VIF ~3.7-4.0 for PSQI/AIS - see printed output) and sample-size loss that
@@ -938,7 +953,7 @@ print(sleep_effect_summary_qol)
 write.csv(sleep_effect_summary_qol, "adjusted_sleep_effects_summary.csv", row.names = FALSE)
 
 ## =============================================================================
-## 11e. Full covariate tables for all 8 adjusted models (appendix table)
+## 10e. Full covariate tables for all 8 adjusted models (appendix table)
 ## =============================================================================
 
 extract_full_model <- function(key) {
@@ -973,7 +988,7 @@ print(full_model_results_qol)
 write.csv(full_model_results_qol, "full_model_coefficients.csv", row.names = FALSE)
 
 ## =============================================================================
-## End of Analysis 4 script.
+## End of Analysis script.
 ## Suggested report text for each significant sleep-instrument coefficient:
 ##   "A one-point increase in <instrument> was associated with an estimated
 ##    <beta>-point <increase/decrease> in <PCS/MCS> (95% CI: <low>, <high>,
