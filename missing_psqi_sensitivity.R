@@ -208,7 +208,226 @@ model_information <- data.frame(
 )
 
 # -------------------------------------------------------------------------
-# 5. SIMPLE MISSINGNESS FIGURE
+# 5. INVERSE-PROBABILITY-WEIGHTED PSQI SENSITIVITY ANALYSIS
+# -------------------------------------------------------------------------
+#
+# The final adjusted PSQI predictor model includes Gender, Recurrence,
+# AnyFibrosis and Depression. Complete-case analysis is valid only if the
+# participants with observed PSQI are sufficiently representative after
+# conditioning on observed characteristics.
+#
+# We therefore model the probability that PSQI is OBSERVED and give greater
+# weight to participants who had a lower estimated probability of having PSQI
+# recorded. Liver diagnosis and corticosteroid use are included as auxiliary
+# variables because the broader missingness model above suggested that they
+# may help explain PSQI availability. All variables in this weighting model
+# are complete, so probabilities can be estimated for all 268 participants.
+
+df$PSQI_observed_binary <- as.integer(!is.na(df$PSQI))
+
+observation_model <- glm(
+  PSQI_observed_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f +
+    Depression_f + LiverDiagnosis_f + Corticosteroid_f,
+  data = df,
+  family = binomial
+)
+
+df$PSQI_observation_probability <- predict(
+  observation_model,
+  type = "response"
+)
+
+# Stabilized inverse-probability-of-observation weights have an average close
+# to 1 and usually behave better than unstabilized weights. Multiplying every
+# weight by the same stabilizing constant does not change the fitted
+# coefficients.
+probability_observed <- mean(df$PSQI_observed_binary)
+df$PSQI_weight <- ifelse(
+  df$PSQI_observed_binary == 1,
+  probability_observed / df$PSQI_observation_probability,
+  NA_real_
+)
+
+psqi_analysis_data <- df[df$PSQI_observed_binary == 1, ]
+
+stopifnot(all(is.finite(psqi_analysis_data$PSQI_weight)))
+stopifnot(all(psqi_analysis_data$PSQI_weight > 0))
+
+final_psqi_formula <- PSQI_binary ~
+  Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f
+
+# Original complete-case model from the predictor analysis.
+psqi_complete_case_model <- glm(
+  final_psqi_formula,
+  data = psqi_analysis_data,
+  family = binomial
+)
+
+# Weighted version of the same model. A quasibinomial family avoids treating
+# the non-integer survey-style weights as literal binomial trial counts.
+psqi_weighted_model <- glm(
+  final_psqi_formula,
+  data = psqi_analysis_data,
+  weights = PSQI_weight,
+  family = quasibinomial
+)
+
+# Summarize whether any weights are unusually large and calculate the
+# effective sample size after weighting.
+weight_diagnostics <- data.frame(
+  Metric = c(
+    "Minimum stabilized weight",
+    "Mean stabilized weight",
+    "Maximum stabilized weight",
+    "Effective sample size"
+  ),
+  Value = c(
+    min(psqi_analysis_data$PSQI_weight),
+    mean(psqi_analysis_data$PSQI_weight),
+    max(psqi_analysis_data$PSQI_weight),
+    sum(psqi_analysis_data$PSQI_weight)^2 /
+      sum(psqi_analysis_data$PSQI_weight^2)
+  )
+)
+weight_diagnostics$Value <- round(weight_diagnostics$Value, 3)
+
+# Non-parametric bootstrap confidence intervals account for uncertainty in
+# both the observation model and the weighted outcome model without requiring
+# an additional R package.
+set.seed(1859)
+n_bootstrap <- 1000
+coefficient_names <- names(coef(psqi_weighted_model))
+
+bootstrap_coefficients <- matrix(
+  NA_real_,
+  nrow = n_bootstrap,
+  ncol = length(coefficient_names),
+  dimnames = list(NULL, coefficient_names)
+)
+
+for (bootstrap_index in seq_len(n_bootstrap)) {
+  sampled_rows <- sample.int(nrow(df), replace = TRUE)
+  bootstrap_data <- df[sampled_rows, ]
+
+  bootstrap_observation_model <- try(
+    glm(
+      PSQI_observed_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f +
+        Depression_f + LiverDiagnosis_f + Corticosteroid_f,
+      data = bootstrap_data,
+      family = binomial
+    ),
+    silent = TRUE
+  )
+
+  if (inherits(bootstrap_observation_model, "try-error")) {
+    next
+  }
+
+  bootstrap_data$PSQI_observation_probability <- suppressWarnings(
+    predict(
+      bootstrap_observation_model,
+      newdata = bootstrap_data,
+      type = "response"
+    )
+  )
+
+  bootstrap_probability_observed <- mean(
+    bootstrap_data$PSQI_observed_binary
+  )
+  bootstrap_data$PSQI_weight <- ifelse(
+    bootstrap_data$PSQI_observed_binary == 1,
+    bootstrap_probability_observed /
+      bootstrap_data$PSQI_observation_probability,
+    NA_real_
+  )
+
+  bootstrap_psqi_data <- bootstrap_data[
+    bootstrap_data$PSQI_observed_binary == 1,
+  ]
+
+  bootstrap_weighted_model <- try(
+    suppressWarnings(
+      glm(
+        final_psqi_formula,
+        data = bootstrap_psqi_data,
+        weights = PSQI_weight,
+        family = quasibinomial
+      )
+    ),
+    silent = TRUE
+  )
+
+  if (inherits(bootstrap_weighted_model, "try-error")) {
+    next
+  }
+
+  bootstrap_coefficients[bootstrap_index, ] <- coef(
+    bootstrap_weighted_model
+  )[coefficient_names]
+}
+
+valid_bootstrap_samples <- sum(complete.cases(bootstrap_coefficients))
+stopifnot(valid_bootstrap_samples >= 0.95 * n_bootstrap)
+
+weighted_confidence_intervals <- t(
+  apply(
+    bootstrap_coefficients,
+    2,
+    quantile,
+    probs = c(0.025, 0.975),
+    na.rm = TRUE
+  )
+)
+
+complete_case_coefficients <- summary(
+  psqi_complete_case_model
+)$coefficients
+complete_case_confidence_intervals <- confint.default(
+  psqi_complete_case_model
+)
+
+term_labels <- c(
+  "(Intercept)" = "Intercept",
+  "Gender_fFemale" = "Female vs Male",
+  "Recurrence_fYes" = "Recurrence: Yes vs No",
+  "AnyFibrosis_fYes" = "Any fibrosis: Yes vs No",
+  "Depression_fYes" = "Depression: Yes vs No"
+)
+
+weighting_comparison <- data.frame(
+  Predictor = unname(term_labels[coefficient_names]),
+  Complete_case_OR = exp(coef(psqi_complete_case_model)),
+  Complete_case_CI_low = exp(
+    complete_case_confidence_intervals[coefficient_names, 1]
+  ),
+  Complete_case_CI_high = exp(
+    complete_case_confidence_intervals[coefficient_names, 2]
+  ),
+  Complete_case_P_value = complete_case_coefficients[
+    coefficient_names,
+    "Pr(>|z|)"
+  ],
+  Weighted_OR = exp(coef(psqi_weighted_model)),
+  Weighted_bootstrap_CI_low = exp(
+    weighted_confidence_intervals[coefficient_names, 1]
+  ),
+  Weighted_bootstrap_CI_high = exp(
+    weighted_confidence_intervals[coefficient_names, 2]
+  ),
+  Percent_change_in_OR = 100 * (
+    exp(coef(psqi_weighted_model)) -
+      exp(coef(psqi_complete_case_model))
+  ) / exp(coef(psqi_complete_case_model)),
+  row.names = NULL
+)
+
+weighting_comparison[, -1] <- lapply(
+  weighting_comparison[, -1],
+  function(x) round(x, 4)
+)
+
+# -------------------------------------------------------------------------
+# 6. SIMPLE MISSINGNESS FIGURE
 # -------------------------------------------------------------------------
 
 png(
@@ -238,7 +457,7 @@ text(
 dev.off()
 
 # -------------------------------------------------------------------------
-# 6. CONSOLE SUMMARY
+# 7. CONSOLE SUMMARY
 # -------------------------------------------------------------------------
 
 cat("\nPSQI MISSINGNESS SUMMARY\n")
@@ -252,3 +471,13 @@ print(missingness_model_results, row.names = FALSE)
 
 cat("\nMODEL INFORMATION\n")
 print(model_information, row.names = FALSE)
+
+cat("\nIPW WEIGHT DIAGNOSTICS\n")
+print(weight_diagnostics, row.names = FALSE)
+
+cat(
+  "\nCOMPLETE-CASE VERSUS WEIGHTED FINAL PSQI PREDICTOR MODEL\n",
+  "Bootstrap samples used: ", valid_bootstrap_samples, "\n",
+  sep = ""
+)
+print(weighting_comparison, row.names = FALSE)
