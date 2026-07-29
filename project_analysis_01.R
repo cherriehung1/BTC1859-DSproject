@@ -751,7 +751,7 @@ write.csv(cor_results_qol, "correlation_results_sleep_vs_qol.csv", row.names = F
 # the normality assumption so the primary test relied on was the Wilcoxon rank-sum test.
 
 compare_groups <- function(data, group_var, outcome_var, sleep_label) {
-  d <- data %>% select(grp = all_of(group_var), y = all_of(outcome_var)) %>%
+  d <- data %>% dplyr::select(grp = all_of(group_var), y = all_of(outcome_var)) %>%
     filter(!is.na(grp), !is.na(y))
   
   # Welch t-test (unequal variances assumed by default)
