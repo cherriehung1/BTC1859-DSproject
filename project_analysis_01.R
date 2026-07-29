@@ -1,11 +1,15 @@
 ## BTC1859 - Team 1
 # Predictors of Sleep Disturbance (logistic regression) + SF36 QoL (linear regression)
-# Merged script - namespaced to avoid collisions between the two analyses.
-# Naming convention: everything in the sleep-disturbance analysis uses a
-# "_sleep" or "sleep_" prefix/dataframe (df_sleep); everything in the QoL
-# analysis uses a "_qol"/"qol_" prefix/dataframe (df_qol). The two halves
-# read the raw CSV independently and never share a variable name, so neither
-# section can silently overwrite the other's objects.
+# Merged script - data is loaded and recoded ONCE (Section 0 below) and shared
+# by both analyses via a single data frame, df. Naming convention: the
+# demographic/clinical covariates use the same "_f" factor-suffix names
+# (Gender_f, LiverDiagnosis_f, Recurrence_f, Rejection_f, AnyFibrosis_f,
+# RenalFailure_f, Depression_f, Corticosteroid_f) in BOTH halves, so a
+# predictor is recoded exactly once no matter which analysis uses it.
+# Objects specific to one analysis still use a "sleep_"/"_sleep" or
+# "qol_"/"_qol" prefix (e.g. qol_covariates, sleep_predictors) so the two
+# halves' model-building code can't collide, even though they now read from
+# the same df.
 
 # ---------------------------------------------------------------
 # SETUP: packages (all imports up front, used by BOTH halves of this script)
@@ -24,35 +28,38 @@ for (pkg in required_packages) {
 
 # =================================================================
 # ANALYSIS 1: PREDICTORS OF SLEEP DISTURBANCE (logistic regression)
-# All objects in this analysis use df_sleep and are prefixed sleep_/_sleep
+# All objects in this analysis use df and are prefixed sleep_/_sleep
 # where a name might otherwise be ambiguous.
 # =================================================================
 
 # ---------------------------------------------------------------
-# 0. LOAD DATA
+# 0. LOAD DATA (once) + shared factor recoding (used by BOTH analyses)
 # ---------------------------------------------------------------
 
-df_sleep <- read.csv("project_data_cleaned.csv")
+df <- read.csv("project_data_cleaned.csv", na.strings = c("NA", ""))
 
-# Recode factors with meaningful labels (per data dictionary)
-df_sleep$Gender_f          <- factor(df_sleep$Gender, levels=c(1,2),
-                                     labels=c("Male","Female"))
-df_sleep$LiverDiagnosis_f  <- factor(df_sleep$LiverDiagnosis, levels=c(1,2,3,4,5),
-                                     labels=c("HepC","HepB","PSC_PBC_AHA","Alcohol","Other"))
-df_sleep$LiverDiagnosis_f  <- relevel(df_sleep$LiverDiagnosis_f, ref="PSC_PBC_AHA")  # largest group as reference
+# Recode factors with meaningful labels (per data dictionary). These _f
+# columns are the single source of truth for every categorical covariate
+# used anywhere below, in either the sleep-disturbance (Analysis 1) or QoL
+# (Analysis 2) models.
+df$Gender_f          <- factor(df$Gender, levels=c(1,2),
+                                labels=c("Male","Female"))
+df$LiverDiagnosis_f  <- factor(df$LiverDiagnosis, levels=c(1,2,3,4,5),
+                                labels=c("HepC","HepB","PSC_PBC_AHA","Alcohol","Other"))
+df$LiverDiagnosis_f  <- relevel(df$LiverDiagnosis_f, ref="PSC_PBC_AHA")  # largest group as reference
 
-df_sleep$Recurrence_f      <- factor(df_sleep$Recurrence,     levels=c(0,1),
-                                     labels=c("No","Yes"))
-df_sleep$Rejection_f       <- factor(df_sleep$Rejection,      levels=c(0,1),
-                                     labels=c("No","Yes"))
-df_sleep$AnyFibrosis_f     <- factor(df_sleep$AnyFibrosis,    levels=c(0,1),
-                                     labels=c("No","Yes"))
-df_sleep$RenalFailure_f    <- factor(df_sleep$RenalFailure,   levels=c(0,1),
-                                     labels=c("No","Yes"))
-df_sleep$Depression_f      <- factor(df_sleep$Depression,     levels=c(0,1),
-                                     labels=c("No","Yes"))
-df_sleep$Corticosteroid_f  <- factor(df_sleep$Corticosteroid, levels=c(0,1),
-                                     labels=c("No","Yes"))
+df$Recurrence_f      <- factor(df$Recurrence,     levels=c(0,1),
+                                labels=c("No","Yes"))
+df$Rejection_f       <- factor(df$Rejection,      levels=c(0,1),
+                                labels=c("No","Yes"))
+df$AnyFibrosis_f     <- factor(df$AnyFibrosis,    levels=c(0,1),
+                                labels=c("No","Yes"))
+df$RenalFailure_f    <- factor(df$RenalFailure,   levels=c(0,1),
+                                labels=c("No","Yes"))
+df$Depression_f      <- factor(df$Depression,     levels=c(0,1),
+                                labels=c("No","Yes"))
+df$Corticosteroid_f  <- factor(df$Corticosteroid, levels=c(0,1),
+                                labels=c("No","Yes"))
 
 # The four binary sleep disturbance outcomes (done during cleaning)
 # ESS_binary   : ESS > 10   (excessive daytime sleepiness)
@@ -73,7 +80,7 @@ prevalence <- function(x) {
     CI_low_pct=round(100*ci[1],1), CI_high_pct=round(100*ci[2],1))
 }
 
-sapply(df_sleep[,c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")], prevalence)
+sapply(df[,c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")], prevalence)
 
 # NOTE: PSQI has substantially more missing data (~32%) than the other three
 # instruments (~2-6%). This should be flagged as a limitation - any PSQI-based
@@ -85,7 +92,7 @@ sapply(df_sleep[,c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")], pr
 
 for (out in c("ESS_binary","PSQI_binary","AIS_binary","Berlin_binary")) {
   cat("\n---", out, "vs RenalFailure ---\n")
-  tab <- table(df_sleep$RenalFailure_f, df_sleep[[out]])
+  tab <- table(df$RenalFailure_f, df[[out]])
   print(tab)
   print(fisher.test(tab))
 }
@@ -121,7 +128,7 @@ univariable_results <- data.frame()
 for (out in sleep_outcomes) {
   for (pred in sleep_predictors) {
     f <- as.formula(paste(out, "~", pred))
-    m <- glm(f, data=df_sleep, family=binomial)
+    m <- glm(f, data=df, family=binomial)
     co <- summary(m)$coefficients
     ci <- confint(m)
     rows <- data.frame(
@@ -165,10 +172,10 @@ heat_data$sig_label <- with(heat_data,
 # fitted objects directly. Separation is detected via the actual glm()
 # warning rather than an eyeballed OR threshold.
 fit_renal_univariable <- function(outcome) {
-  tab <- table(df_sleep$RenalFailure_f, df_sleep[[outcome]])
+  tab <- table(df$RenalFailure_f, df[[outcome]])
   separated <- any(tab == 0)   # any empty cell -> (quasi-)complete separation
   
-  n <- sum(!is.na(df_sleep$RenalFailure_f) & !is.na(df_sleep[[outcome]]))
+  n <- sum(!is.na(df$RenalFailure_f) & !is.na(df[[outcome]]))
   
   if (separated) {
     return(data.frame(outcome = outcome, term = "RenalFailure_f[Yes vs No]",
@@ -176,7 +183,7 @@ fit_renal_univariable <- function(outcome) {
                       sig_label = "n/e", n = n))
   }
   
-  m  <- glm(as.formula(paste(outcome, "~ RenalFailure_f")), data = df_sleep, family = binomial)
+  m  <- glm(as.formula(paste(outcome, "~ RenalFailure_f")), data = df, family = binomial)
   co <- summary(m)$coefficients
   term_name <- grep("RenalFailure", rownames(co), value = TRUE)
   
@@ -231,7 +238,7 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
        title = "Univariable predictors of sleep disturbance, by instrument",
        caption = paste0("** p<0.01, * p<0.05, ^ p<0.10. Renal failure (grey/'n/e' cells) could not be\n",
                         "estimated for some outcomes due to complete separation (n=",
-                        sum(df_sleep$RenalFailure == 1, na.rm = TRUE), " cases) - see Section 2.")) +
+                        sum(df$RenalFailure == 1, na.rm = TRUE), " cases) - see Section 2.")) +
   theme_minimal(base_size = 11) +
   theme(panel.grid = element_blank(),
         axis.text.x = element_text(face = "bold"),
@@ -288,10 +295,10 @@ ggplot(heat_data, aes(x = outcome, y = term, fill = log(OR))) +
 # the data refresh that shifted ESS's missingness from 17 to 18
 # LiverDiagnosis collapsed to Hep C vs Other (1 df instead of 4) to fit budget,
 # since only the Hep C level was significant univariably.
-df_sleep$LiverDx_HepC <- factor(ifelse(df_sleep$LiverDiagnosis==1,"HepC","Other"))
+df$LiverDx_HepC <- factor(ifelse(df$LiverDiagnosis==1,"HepC","Other"))
 
 ess_model <- glm(ESS_binary ~ Gender_f + LiverDx_HepC + Recurrence_f + Rejection_f,
-                 data=df_sleep, family=binomial)
+                 data=df, family=binomial)
 summary(ess_model)
 round(cbind(OR=exp(coef(ess_model)), exp(confint(ess_model))), 3)
 vif(ess_model)
@@ -300,14 +307,14 @@ vif(ess_model)
 # before budget trimming) to justify the simpler model:
 ess_full <- glm(ESS_binary ~ Gender_f + LiverDiagnosis_f + Recurrence_f + Rejection_f +
                   AnyFibrosis_f + Depression_f + Corticosteroid_f,
-                data=df_sleep, family=binomial)
+                data=df, family=binomial)
 anova(ess_model, ess_full, test="Chisq")   # non-significant -> simpler model preferred
 
 # ESS: full p<0.20-screened candidate set (using the full 4-level LiverDiagnosis_f,
 # not the ess_model's collapsed HepC-vs-Other version, so AIC can decide for itself
 # whether to keep it whole, drop it, or - unlike the primary model - it can only
 # keep/drop the whole factor, not collapse individual levels)
-ess_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("ESS_binary","Gender_f","LiverDiagnosis_f",
+ess_stepwise_subset <- df[complete.cases(df[, c("ESS_binary","Gender_f","LiverDiagnosis_f",
                                                             "Recurrence_f","Rejection_f","AnyFibrosis_f",
                                                             "Depression_f","Corticosteroid_f")]), ]
 ess_full_forstep <- glm(ESS_binary ~ Gender_f + LiverDiagnosis_f + Recurrence_f + Rejection_f +
@@ -319,13 +326,13 @@ summary(ess_step)
 ## --- Model 2: PSQI ---
 # m/15 budget ~4 predictors (m=66, smaller class among n=183)
 psqi_model <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f,
-                  data=df_sleep, family=binomial)
+                  data=df, family=binomial)
 summary(psqi_model)
 round(cbind(OR=exp(coef(psqi_model)), exp(confint(psqi_model))), 3)
 vif(psqi_model)
 
 psqi_full <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
-                 data=df_sleep, family=binomial)
+                 data=df, family=binomial)
 
 # NOTE: psqi_model above is fit on n=183 (only limited by PSQI_binary's own
 # missingness, since Gender/Recurrence/AnyFibrosis/Depression have no NAs).
@@ -333,7 +340,7 @@ psqi_full <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depress
 # anova() requires both models fit on the IDENTICAL set of rows,
 # so the reduced model must be refit on psqi_full's subset before comparing -
 # comparing psqi_model (n=183) directly against psqi_full (n=165) would error.
-psqi_subset <- df_sleep[complete.cases(df_sleep[, c("PSQI_binary","Gender_f","Recurrence_f",
+psqi_subset <- df[complete.cases(df[, c("PSQI_binary","Gender_f","Recurrence_f",
                                                     "AnyFibrosis_f","Depression_f","BMI")]), ]
 psqi_model_samesub <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f,
                           data=psqi_subset, family=binomial)
@@ -344,7 +351,7 @@ anova(psqi_model_samesub, psqi_full_samesub, test="Chisq")  # BMI does not impro
 # PSQI example - pre-subset to the shared complete-case set FIRST,
 # same fix as the psqi_model/psqi_full anova() comparison, to avoid
 # stepAIC() comparing models fit on different samples as BMI drops in/out
-psqi_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("PSQI_binary","Gender_f","Recurrence_f",
+psqi_stepwise_subset <- df[complete.cases(df[, c("PSQI_binary","Gender_f","Recurrence_f",
                                                              "AnyFibrosis_f","Depression_f","BMI")]), ]
 psqi_full_forstep <- glm(PSQI_binary ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f + BMI,
                          data = psqi_stepwise_subset, family = binomial)
@@ -354,13 +361,13 @@ summary(psqi_step)
 ## --- Model 3: AIS ---
 # m/15 budget ~7-8 predictors (m=117, smaller class among n=262)
 ais_model <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
-                 data=df_sleep, family=binomial)
+                 data=df, family=binomial)
 summary(ais_model)
 round(cbind(OR=exp(coef(ais_model)), exp(confint(ais_model))), 3)
 vif(ais_model)
 
 ais_full <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
-                  Corticosteroid_f, data=df_sleep, family=binomial)
+                  Corticosteroid_f, data=df, family=binomial)
 anova(ais_model, ais_full, test="Chisq")   # Corticosteroid does not improve fit significantly
 
 # Age (p=0.154) and TimeSinceTransplant (p=0.124) both passed the p<0.20
@@ -373,7 +380,7 @@ anova(ais_model, ais_full, test="Chisq")   # Corticosteroid does not improve fit
 # Same anova() requirement as the PSQI/BMI comparison above: refit ais_model
 # on the SAME complete-case subset as each expanded model before comparing,
 # since Age/TimeSinceTransplant may carry their own missingness.
-ais_subset_age <- df_sleep[complete.cases(df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+ais_subset_age <- df[complete.cases(df[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
                                                        "AnyFibrosis_f","Depression_f","Age")]), ]
 ais_model_samesub_age <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
                              data=ais_subset_age, family=binomial)
@@ -381,8 +388,8 @@ ais_full_age <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f
                     data=ais_subset_age, family=binomial)
 anova(ais_model_samesub_age, ais_full_age, test="Chisq")
 
-ais_subset_tst <- df_sleep[complete.cases(
-  df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+ais_subset_tst <- df[complete.cases(
+  df[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
                  "AnyFibrosis_f","Depression_f","TimeSinceTransplant")]), ]
 ais_model_samesub_tst <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
                              data=ais_subset_tst, family=binomial)
@@ -390,8 +397,8 @@ ais_full_tst <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f
                     data=ais_subset_tst, family=binomial)
 anova(ais_model_samesub_tst, ais_full_tst, test="Chisq")
 
-ais_subset_both <- df_sleep[complete.cases(
-  df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+ais_subset_both <- df[complete.cases(
+  df[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
                 "AnyFibrosis_f","Depression_f","Age","TimeSinceTransplant")]), ]
 ais_model_samesub_both <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f,
                               data=ais_subset_both, family=binomial)
@@ -405,7 +412,7 @@ cat("n (Age subset):", nobs(ais_model_samesub_age),
 
 # AIS check - widen the scope to include everything that passed p<0.20,
 # including Age/TimeSinceTransplant/Corticosteroid, pre-subset the same way
-ais_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
+ais_stepwise_subset <- df[complete.cases(df[, c("AIS_binary","LiverDiagnosis_f","Recurrence_f",
                                                             "AnyFibrosis_f","Depression_f","Corticosteroid_f",
                                                             "Age","TimeSinceTransplant")]), ]
 ais_full_forstep <- glm(AIS_binary ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f +
@@ -422,7 +429,7 @@ summary(ais_step)
 # positive/148 negative -> m=89, m/15=5.9 (~5-6 predictors). Still comfortably
 # fits the 3 predictors used below.
 berlin_model <- glm(Berlin_binary ~ Age + BMI + TimeSinceTransplant,
-                    data=df_sleep, family=binomial)
+                    data=df, family=binomial)
 summary(berlin_model)
 round(cbind(OR=exp(coef(berlin_model)), exp(confint(berlin_model))), 3)
 vif(berlin_model)
@@ -431,7 +438,7 @@ vif(berlin_model)
 # already identical to berlin_model's current 3 predictors - no other candidate
 # passed the p<0.20 screen for Berlin, so this mainly checks whether AIC would
 # trim any of the three, rather than testing a genuinely larger candidate pool
-berlin_stepwise_subset <- df_sleep[complete.cases(df_sleep[, c("Berlin_binary","Age","BMI",
+berlin_stepwise_subset <- df[complete.cases(df[, c("Berlin_binary","Age","BMI",
                                                                "TimeSinceTransplant")]), ]
 berlin_full_forstep <- glm(Berlin_binary ~ Age + BMI + TimeSinceTransplant,
                            data = berlin_stepwise_subset, family = binomial)
@@ -446,9 +453,9 @@ summary(berlin_step)
 # at the clinical cutoff is discarding useful information. Berlin has no
 # continuous version (binary at source), so it is omitted here.
 
-ess_lin  <- lm(ESS  ~ Gender_f + LiverDx_HepC + Recurrence_f + Rejection_f, data=df_sleep)
-psqi_lin <- lm(PSQI ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f, data=df_sleep)
-ais_lin  <- lm(AIS  ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f, data=df_sleep)
+ess_lin  <- lm(ESS  ~ Gender_f + LiverDx_HepC + Recurrence_f + Rejection_f, data=df)
+psqi_lin <- lm(PSQI ~ Gender_f + Recurrence_f + AnyFibrosis_f + Depression_f, data=df)
+ais_lin  <- lm(AIS  ~ LiverDiagnosis_f + Recurrence_f + AnyFibrosis_f + Depression_f, data=df)
 
 summary(ess_lin);  shapiro.test(resid(ess_lin))
 summary(psqi_lin); shapiro.test(resid(psqi_lin))
@@ -576,68 +583,40 @@ ggsave("forest_plot_sleep_disturbance.png",
 
 # =================================================================
 # ANALYSIS 2: SF36 QUALITY OF LIFE (linear regression)
-# All objects in this section use df_qol and are prefixed qol_/_qol
-# where a name might otherwise be ambiguous. This is an INDEPENDENT read of
-# the same source CSV - it never touches or
-# overwrites df_sleep or any object created in Analysis 1 above.
+# Reuses the single df loaded and recoded in Section 0 above - no second
+# read.csv() call. Objects specific to this analysis (covariate list,
+# fitted models, summary tables) are still prefixed qol_/_qol where a name
+# might otherwise be ambiguous, but they are added onto the same df rather
+# than living in a separate data frame, so nothing here needs to duplicate
+# the factor recoding already done for Analysis 1. Nothing below overwrites
+# or removes any object created in Analysis 1 above (ess_model, df$Gender_f,
+# etc.) - it only adds new columns/objects with distinct names.
 # =================================================================
 
-df_qol <- read.csv("project_data_cleaned.csv", na.strings = c("NA", ""))
+## ---- 7. Sleep-instrument aliases needed only for the QoL models -----------
+## All demographic/clinical covariates (Gender_f, LiverDiagnosis_f,
+## Recurrence_f, Rejection_f, AnyFibrosis_f, RenalFailure_f, Depression_f,
+## Corticosteroid_f) and the raw sleep/QoL columns (ESS, PSQI, AIS, Berlin,
+## PCS, MCS) were already loaded and recoded once in Section 0 above, so
+## nothing is re-derived here. The only QoL-specific addition is BSS, an
+## alias for Berlin so the "one sleep instrument at a time" modeling loop
+## below (Section 10) can build formulas like "PCS ~ BSS + ..." using a
+## column name that isn't already tied to the binary Berlin_binary outcome
+## used in Analysis 1.
 
-## ---- 7. Recode / label variables we need -----------------------------------
+df$BSS <- df$Berlin          # already binary (0/1)
 
-df_qol <- df_qol %>%
-  mutate(
-    # sleep instruments (continuous)
-    ESS  = ESS,
-    PSQI = PSQI,
-    AIS  = AIS,
-    BSS  = Berlin,          # already binary (0/1)
-    
-    # QoL outcomes
-    PCS = PCS,
-    MCS = MCS,
-    
-    # binary sleep-disturbance flags using the clinically accepted cut-offs
-    # given in the assignment (NOT the pre-existing "Poor.sleep.quality" /
-    # "Insomnia" columns, so that the thresholds are explicit and reproducible)
-    ESS_dist  = factor(ifelse(ESS  > 10, "Disturbed", "No disturbance"),
-                       levels = c("No disturbance", "Disturbed")),
-    PSQI_dist = factor(ifelse(PSQI > 4,  "Disturbed", "No disturbance"),
-                       levels = c("No disturbance", "Disturbed")),
-    AIS_dist  = factor(ifelse(AIS  > 5,  "Disturbed", "No disturbance"),
-                       levels = c("No disturbance", "Disturbed")),
-    BSS_dist  = factor(ifelse(BSS  == 1, "Disturbed", "No disturbance"),
-                       levels = c("No disturbance", "Disturbed")),
-    
-    # covariates for the adjusted models, as factors where appropriate.
-    # NOTE: renamed from dotted-style names (e.g. "Recurrence.of.disease") to
-    # underscore_case for readability and to match the _f/underscore
-    # convention used in the Analysis 3 half of this script. "Corticoid" was
-    # also corrected to "Corticosteroid_f" (typo in the original - dropped
-    # "steroid" - and clarified as the factor-recoded version).
-    Gender                       = factor(Gender, levels = c(1, 2),
-                                          labels = c("Male", "Female")),
-    Liver_Diagnosis               = factor(LiverDiagnosis, levels = c(1,2,3,4,5),
-                                           labels = c("HepC","HepB","PSC_PBC_AHA","Alcohol","Other")),
-    Liver_Diagnosis <- relevel(LiverDiagnosis, ref="PSC_PBC_AHA")  # largest group as reference (same as before)
-    
-    Recurrence_of_Disease         = factor(Recurrence, levels = c(0, 1),
-                                           labels = c("No", "Yes")),
-    Rejection_Graft_Dysfunction   = factor(Rejection, levels = c(0, 1),
-                                           labels = c("No", "Yes")),
-    Any_Fibrosis                  = factor(AnyFibrosis, levels = c(0, 1),
-                                           labels = c("No", "Yes")),
-    Renal_Failure                  = factor(RenalFailure, levels = c(0, 1),
-                                            labels = c("No", "Yes")),
-    Depression                   = factor(Depression, levels = c(0, 1),
-                                          labels = c("No", "Yes")),
-    Corticosteroid_f              = factor(Corticosteroid, levels = c(0, 1),
-                                           labels = c("No", "Yes")),
-    Age                          = Age,
-    BMI                          = BMI,
-    Time_From_Transplant           = TimeSinceTransplant
-  )
+# binary sleep-disturbance flags using the clinically accepted cut-offs
+# given in the assignment (NOT the pre-existing "Poor.sleep.quality" /
+# "Insomnia" columns, so that the thresholds are explicit and reproducible)
+df$ESS_dist  <- factor(ifelse(df$ESS  > 10, "Disturbed", "No disturbance"),
+                        levels = c("No disturbance", "Disturbed"))
+df$PSQI_dist <- factor(ifelse(df$PSQI > 4,  "Disturbed", "No disturbance"),
+                        levels = c("No disturbance", "Disturbed"))
+df$AIS_dist  <- factor(ifelse(df$AIS  > 5,  "Disturbed", "No disturbance"),
+                        levels = c("No disturbance", "Disturbed"))
+df$BSS_dist  <- factor(ifelse(df$BSS  == 1, "Disturbed", "No disturbance"),
+                        levels = c("No disturbance", "Disturbed"))
 
 
 ## =============================================================================
@@ -666,9 +645,9 @@ plot_scatter <- function(data, xvar, xlab) {
   list(pcs = p_pcs, mcs = p_mcs)
 }
 
-ess_plots_qol  <- plot_scatter(df_qol, "ESS",  "Epworth Sleepiness Scale (ESS)")
-psqi_plots_qol <- plot_scatter(df_qol, "PSQI", "Pittsburgh Sleep Quality Index (PSQI)")
-ais_plots_qol  <- plot_scatter(df_qol, "AIS",  "Athens Insomnia Scale (AIS)")
+ess_plots_qol  <- plot_scatter(df, "ESS",  "Epworth Sleepiness Scale (ESS)")
+psqi_plots_qol <- plot_scatter(df, "PSQI", "Pittsburgh Sleep Quality Index (PSQI)")
+ais_plots_qol  <- plot_scatter(df, "AIS",  "Athens Insomnia Scale (AIS)")
 
 # Save all six scatterplots to file (2 outcomes x 3 instruments)
 ggsave("scatter_ESS_PCS.png",  ess_plots_qol$pcs,  width = 5, height = 4)
@@ -706,9 +685,9 @@ check_skew <- function(x) {
 }
 
 skew_tbl_qol <- rbind(
-  ESS  = check_skew(df_qol$ESS),
-  PSQI = check_skew(df_qol$PSQI),
-  AIS  = check_skew(df_qol$AIS)
+  ESS  = check_skew(df$ESS),
+  PSQI = check_skew(df$PSQI),
+  AIS  = check_skew(df$AIS)
 )
 print(round(skew_tbl_qol, 2))
 
@@ -735,12 +714,12 @@ cor_test_both <- function(x, y, xname, yname) {
 }
 
 cor_results_qol <- bind_rows(
-  cor_test_both(df_qol$ESS,  df_qol$PCS, "ESS",  "PCS"),
-  cor_test_both(df_qol$ESS,  df_qol$MCS, "ESS",  "MCS"),
-  cor_test_both(df_qol$PSQI, df_qol$PCS, "PSQI", "PCS"),
-  cor_test_both(df_qol$PSQI, df_qol$MCS, "PSQI", "MCS"),
-  cor_test_both(df_qol$AIS,  df_qol$PCS, "AIS",  "PCS"),
-  cor_test_both(df_qol$AIS,  df_qol$MCS, "AIS",  "MCS")
+  cor_test_both(df$ESS,  df$PCS, "ESS",  "PCS"),
+  cor_test_both(df$ESS,  df$MCS, "ESS",  "MCS"),
+  cor_test_both(df$PSQI, df$PCS, "PSQI", "PCS"),
+  cor_test_both(df$PSQI, df$MCS, "PSQI", "MCS"),
+  cor_test_both(df$AIS,  df$PCS, "AIS",  "PCS"),
+  cor_test_both(df$AIS,  df$MCS, "AIS",  "MCS")
 )
 
 print(cor_results_qol)
@@ -812,10 +791,10 @@ qol_instruments <- list(
 )
 
 pcs_table_qol <- bind_rows(lapply(names(qol_instruments), function(nm)
-  compare_groups(df_qol, qol_instruments[[nm]], "PCS", nm)))
+  compare_groups(df, qol_instruments[[nm]], "PCS", nm)))
 
 mcs_table_qol <- bind_rows(lapply(names(qol_instruments), function(nm)
-  compare_groups(df_qol, qol_instruments[[nm]], "MCS", nm)))
+  compare_groups(df, qol_instruments[[nm]], "MCS", nm)))
 
 cat("\n--- Physical QoL (PCS) by disturbance group ---\n")
 print(pcs_table_qol)
@@ -849,8 +828,8 @@ make_boxplot <- function(data, group_var, outcome_var, ylab, title) {
 }
 
 plot_list <- list()
-for (nm in names(instruments)) {
-  gv <- instruments[[nm]]
+for (nm in names(qol_instruments)) {
+  gv <- qol_instruments[[nm]]
   plot_list[[paste0(nm, "_PCS")]] <- make_boxplot(df, gv, "PCS", "SF-36 PCS", paste(nm, "- Physical QoL"))
   plot_list[[paste0(nm, "_MCS")]] <- make_boxplot(df, gv, "MCS", "SF-36 MCS", paste(nm, "- Mental QoL"))
 }
@@ -859,7 +838,7 @@ combined_panel <- wrap_plots(plot_list, ncol = 2) +
   plot_annotation(title = "Quality of Life by Sleep Disturbance Group")
 
 ggsave("combined_boxplots.png", combined_panel,
-       width = 9, height = 4 * length(instruments), dpi = 300)
+       width = 9, height = 4 * length(qol_instruments), dpi = 300)
 
 # Boxplots of QoL scores by sleep disturbance group showed consistently lower medians in the "Disturbed" group across 
 # all four sleep instruments (ESS, PSQI, AIS, Berlin) and both QoL domains (PCS, MCS), matching the significant differences 
@@ -892,9 +871,9 @@ ggsave("combined_boxplots.png", combined_panel,
                                   
 ##
 ## Adjustment set (per the assignment's demographic/clinical variable list):
-##   Age, Gender, BMI, Time_From_Transplant, Liver_Diagnosis,
-##   Recurrence_of_Disease, Rejection_Graft_Dysfunction, Any_Fibrosis,
-##   Renal_Failure, Depression, Corticosteroid_f
+##   Age, Gender_f, BMI, TimeSinceTransplant, LiverDiagnosis_f,
+##   Recurrence_f, Rejection_f, AnyFibrosis_f,
+##   RenalFailure_f, Depression_f, Corticosteroid_f
 ##
 ## CAUTION - Depression as a covariate here may be a mediator, not just a
 ## confounder. In Analysis 3, Depression is the single most consistent
@@ -918,10 +897,10 @@ ggsave("combined_boxplots.png", combined_panel,
 ## coefficient when Depression is dropped would itself be informative about
 ## which structure is more likely.
 
-qol_covariates <- c("Age", "Gender", "BMI", "Time_From_Transplant",
-                    "Liver_Diagnosis", "Recurrence_of_Disease",
-                    "Rejection_Graft_Dysfunction", "Any_Fibrosis",
-                    "Renal_Failure", "Depression", "Corticosteroid_f")
+qol_covariates <- c("Age", "Gender_f", "BMI", "TimeSinceTransplant",
+                    "LiverDiagnosis_f", "Recurrence_f",
+                    "Rejection_f", "AnyFibrosis_f",
+                    "RenalFailure_f", "Depression_f", "Corticosteroid_f")
 
 fit_adjusted <- function(data, sleep_var, outcome_var, covars) {
   form <- as.formula(
@@ -940,7 +919,7 @@ adjusted_models <- list()
 for (s in qol_sleep_vars) {
   for (o in qol_outcomes) {
     key <- paste(s, o, sep = "_")
-    adjusted_models[[key]] <- fit_adjusted(df_qol, s, o, qol_covariates)
+    adjusted_models[[key]] <- fit_adjusted(df, s, o, qol_covariates)
   }
 }
 
@@ -978,7 +957,7 @@ for (key in names(adjusted_models)) {
 ## comes from forcing all four sleep instruments into one model. Not used as a
 ## primary model - the four separate models above remain the primary results.
 
-combined_data_qol <- df_qol %>%
+combined_data_qol <- df %>%
   select(PCS, ESS, PSQI, AIS, BSS, all_of(qol_covariates)) %>%
   na.omit()
 
@@ -987,10 +966,10 @@ cat("\nSample size available for the 'kitchen sink' combined model: n =",
     "for the PSQI-only adjusted model.\n")
 
 combined_fit_qol <- lm(PCS ~ ESS + PSQI + AIS + BSS +
-                         Age + Gender + BMI + Time_From_Transplant +
-                         Liver_Diagnosis + Recurrence_of_Disease +
-                         Rejection_Graft_Dysfunction + Any_Fibrosis +
-                         Renal_Failure + Depression + Corticosteroid_f,
+                         Age + Gender_f + BMI + TimeSinceTransplant +
+                         LiverDiagnosis_f + Recurrence_f +
+                         Rejection_f + AnyFibrosis_f +
+                         RenalFailure_f + Depression_f + Corticosteroid_f,
                        data = combined_data_qol)
 
 cat("\nVIFs in the combined ('kitchen sink') model (illustrative only):\n")
@@ -1068,7 +1047,7 @@ write.csv(full_model_results_qol, "full_model_coefficients.csv", row.names = FAL
 ##    liver diagnosis, recurrence of disease, rejection/graft dysfunction,
 ##    fibrosis, renal failure, depression, and corticosteroid use."
 ##
-## CAUTION: Renal_Failure is forced into all 8 models above despite having
+## CAUTION: RenalFailure_f is forced into all 8 models above despite having
 ## only 4 cases in the whole dataset. All 4 happen to survive complete-case
 ## listwise deletion in every one of the 8 models (verified), so this will
 ## not crash vif()/lm() with an aliasing error - but a coefficient estimated
